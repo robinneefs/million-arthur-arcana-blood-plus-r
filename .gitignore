@@ -1,0 +1,28 @@
+# Build output
+build/
+*.o
+*.dll
+*.exe
+*.pdb
+
+# Logs and reports the mod writes while testing
+rollback_log*.txt
+rollback_memdiff*.txt
+rollback_profile*.txt
+*.log
+
+# Local-only material that must never be published
+re-tools/
+private/
+archive/
+*.pkl
+*.idb
+*.i64
+
+# Editors and OS files
+.vscode/
+.vs/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
