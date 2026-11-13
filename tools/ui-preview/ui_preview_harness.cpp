@@ -18,7 +18,7 @@ struct NHdr { uint32_t magic; uint8_t type, flags; uint16_t epoch; };
 #pragma pack(pop)
 enum : uint8_t { M_LOBBY = 12, M_START = 13, M_STARTACK = 14 };
 enum NetState { NS_OFF, NS_HELLO, NS_ON };
-static const uint32_t NET_BUILD = 57;
+static const uint32_t NET_BUILD = 58;
 static struct { int side = 0; uint32_t seed = 1; NetState st = NS_ON; uint32_t rtt = 16; bool saved = false; uint32_t origCfg[24]; } N;
 static struct { int delay = 2; } g_ncfg;
 static char g_uiName[32] = "DESKTOP";

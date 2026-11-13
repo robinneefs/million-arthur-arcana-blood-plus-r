@@ -41,8 +41,14 @@ enum UiScreen { US_CONNECT, US_SESSION, US_CONTROLS };
 static struct Ui {
     std::atomic<bool> visible{false};
     std::atomic<bool> capture{false};     // the overlay takes the input this frame (set on the game thread)
-    std::atomic<bool> drain{false};       // overlay just closed: keep the game's input off until all buttons are up
+    std::atomic<bool> drain{false};       // overlay just closed: keep the game's input off until the buttons held then are up
+    bool drainArmed = false;              // (build 58) drain only waits for the buttons held when the overlay closed
+    uint32_t drainHeld[10] = {};
+    int drainFrames = 0;
     bool autoOpened = false;
+    int titleStep = 0;                    // build 58: 0 title screen, 1 button down there, 2 released (counting), 3 opened
+    int titleWait = 0;
+    uint32_t anyRaw = 0;                  // every pad and the keyboard slots, this frame
     int screen = US_CONNECT;
     int backTo = US_CONNECT;              // where Controls returns to
     // connect settings (overlay thread; copied to the session on Connect)
@@ -120,6 +126,36 @@ static void UiSessionStarted() {
 
 // ---- game thread ---------------------------------------------------------------
 static bool KeyPressed(int vk);
+static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+// Build 58 diagnostics: which fields of the title screen object change when the
+// "press start" picture turns into the main menu (so a later build can tell the two
+// apart exactly). Fields that keep changing (timers) are only logged a few times.
+static void UiTitleWatch(uint32_t vt, uint32_t ptr) {
+    static uint32_t lastPtr = 0, prev[0xC0];
+    static uint8_t changes[0xC0];
+    static int lines = 0;
+    static bool readable = false;
+    if (vt != VT_TITLE || !ptr || lines >= 160) return;
+    if (ptr != lastPtr) {
+        lastPtr = ptr;
+        MEMORY_BASIC_INFORMATION mi{};
+        readable = VirtualQuery((void*)ptr, &mi, sizeof mi) && mi.State == MEM_COMMIT && !(mi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+                   (uintptr_t)mi.BaseAddress + mi.RegionSize >= ptr + sizeof prev;
+        if (readable) memcpy(prev, (void*)ptr, sizeof prev);
+        memset(changes, 0, sizeof changes);
+        Log("ui: title screen object at 0x%08X (%s)", ptr, readable ? "watching its fields" : "not readable");
+        return;
+    }
+    if (!readable) return;
+    const uint32_t* cur = reinterpret_cast<const uint32_t*>(ptr);
+    for (int i = 1; i < 0xC0 && lines < 160; i++) {          // (0 = vtable)
+        uint32_t v = cur[i];
+        if (v == prev[i]) continue;
+        if (changes[i] < 255) changes[i]++;
+        if (changes[i] <= 3) { Log("ui: title +0x%03X: %08X -> %08X (pads %08X)", i * 4, prev[i], v, U.anyRaw); lines++; }
+        prev[i] = v;
+    }
+}
 // Every frame on the game thread (from PollHotkeys), also when the window is in the background.
 static void UiGameThreadTick(bool focused) {
     uint32_t vt, ptr;
@@ -139,12 +175,29 @@ static void UiGameThreadTick(bool focused) {
         if (!v) U.drain = true;
         Log("ui: overlay %s", v ? "shown" : "hidden");
     }
-    // opens by itself the first time the title / main menu is up
-    if (!U.autoOpened && vt == VT_TITLE) {
-        U.autoOpened = true;
-        U.visible = true;
-        Log("ui: overlay opened on the title screen (F1 hides it)");
+    // Opens by itself the first time the main menu is up (build 58, test 57: not on the
+    // "press start" picture). The title picture and the main menu are one screen
+    // (CMLTitle), so: wait for a button press on it, its release, then half a second.
+    static uint32_t prevAny = 0, titleBits = 0;
+    if (!U.autoOpened) {
+        if (vt != VT_TITLE) { if (U.titleStep < 3) U.titleStep = 0; }
+        else if (U.titleStep == 0) {             // a new press (a button that is always on doesn't count)
+            uint32_t fresh = U.anyRaw & ~prevAny;
+            bool key = focused && (KeyDown(VK_RETURN) || KeyDown(VK_SPACE));
+            if (fresh || key) { U.titleStep = 1; titleBits = fresh; }
+        }
+        else if (U.titleStep == 1) {
+            if (!(U.anyRaw & titleBits) && !(focused && (KeyDown(VK_RETURN) || KeyDown(VK_SPACE)))) { U.titleStep = 2; U.titleWait = 0; }
+        }
+        else if (U.titleStep == 2 && ++U.titleWait >= 30) {
+            U.titleStep = 3;
+            U.autoOpened = true;
+            if (!U.visible) { U.visible = true; Log("ui: overlay opened on the main menu (F1 hides it)"); }
+        }
+        if (U.visible) U.autoOpened = true;   // opened by hand with F1 first
+        UiTitleWatch(vt, ptr);
     }
+    prevAny = U.anyRaw;
     // the game's own synced screens (old menu path) and tests: overlay steps aside
     if (U.visible && (inSynced || g_mode != Mode::Idle || g_auto)) { U.visible = false; U.drain = true; Log("ui: overlay hidden (game screen in step / test running)"); }
     U.capture = U.visible.load() && focused && !inSynced && g_mode == Mode::Idle && !g_auto;
@@ -206,10 +259,30 @@ static void UiAfterGameInput() {
                 break;
             }
     }
+    U.anyRaw = any;
     bool block = U.capture.load();
     if (!block && U.drain.load()) {
-        if (any) block = true;
-        else U.drain = false;
+        // Build 58 (test 57: the controller stayed blocked after F1): wait only for the
+        // buttons that were held when the overlay closed, and never longer than 3/4 s,
+        // so a pad that always reports a button (stick drift, a trigger) can't keep it shut.
+        if (!U.drainArmed) {
+            U.drainArmed = true;
+            U.drainFrames = 0;
+            for (uint32_t i = 0; i < addr::PAD_COUNT && i < 10; i++) U.drainHeld[i] = U.padRaw[i];
+        }
+        uint32_t held = 0;
+        for (uint32_t i = 0; i < addr::PAD_COUNT && i < 10; i++) { U.drainHeld[i] &= U.padRaw[i]; held |= U.drainHeld[i]; }
+        if (!held || ++U.drainFrames > 45) {
+            if (held) {
+                char b[160]; int n = 0;
+                for (uint32_t i = 0; i < addr::PAD_COUNT && i < 10 && n < 140; i++)
+                    if (U.drainHeld[i]) n += snprintf(b + n, sizeof b - n, " slot %u=%08X", i, U.drainHeld[i]);
+                b[n] = 0;
+                Log("ui: game input back (buttons still held:%s)", b);
+            } else Log("ui: game input back");
+            U.drain = false;
+            U.drainArmed = false;
+        } else block = true;
     }
     if (block) {
         ClearMenuInputState();
@@ -233,9 +306,26 @@ static float g_uiScale = 1.0f;
 static uint32_t g_presents = 0;
 static DWORD g_presentTid = 0;
 
+// Build 58 (test 57: no mouse pointer): the game hides the Windows pointer. While the
+// overlay has the input we show it again (on the window's own thread, where the
+// pointer's show count lives) and put it back as it was when the overlay lets go.
+static int g_cursorBumps = 0;
+static std::atomic<bool> g_softCursor{false};    // fallback: ImGui draws the pointer itself
+static void UiCursorOnWindowThread(bool cap) {
+    if (cap && !g_softCursor.load()) {
+        CURSORINFO ci{};
+        ci.cbSize = sizeof ci;
+        if (GetCursorInfo(&ci) && !(ci.flags & CURSOR_SHOWING))
+            for (int i = 0; i < 20 && g_cursorBumps < 40; i++) { g_cursorBumps++; if (ShowCursor(TRUE) >= 0) break; }
+    } else if (!cap && g_cursorBumps) {
+        while (g_cursorBumps > 0) { ShowCursor(FALSE); g_cursorBumps--; }
+    }
+}
+
 static LRESULT CALLBACK UiWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (g_imgui) {
         bool cap = U.capture.load();
+        UiCursorOnWindowThread(cap);
         if (cap || msg == WM_KEYUP || msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) ImGui_ImplWin32_WndProcHandler(h, msg, wp, lp);
         if (cap) {
             switch (msg) {
@@ -736,7 +826,30 @@ static void UiFrame(IDirect3DDevice9* dev) {
     }
     bool show = U.visible.load();
     bool cap = U.capture.load();
-    io.MouseDrawCursor = show && cap;
+    // the Windows pointer (see UiCursorOnWindowThread); if it still isn't visible after
+    // a third of a second, ImGui draws one itself from then on
+    {
+        static int hidden = 0;
+        static bool logged = false;
+        CURSORINFO ci{};
+        ci.cbSize = sizeof ci;
+        bool hw = GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING) && ci.hCursor;
+        if (cap && !logged) {
+            logged = true;
+            RECT cr{}, clip{};
+            GetClientRect(g_uiHwnd, &cr);
+            GetClipCursor(&clip);
+            POINT p = ci.ptScreenPos;
+            ScreenToClient(g_uiHwnd, &p);
+            Log("ui: mouse: pointer %s (flags %lX), at %ld,%ld in a %ldx%ld window, clip %ld,%ld-%ld,%ld, foreground %s",
+                hw ? "visible" : "hidden", ci.flags, p.x, p.y, cr.right, cr.bottom, clip.left, clip.top, clip.right, clip.bottom,
+                GetForegroundWindow() == g_uiHwnd ? "yes" : "no");
+        }
+        if (cap && !hw && !g_softCursor.load()) {
+            if (++hidden > 20) { g_softCursor = true; Log("ui: mouse: the Windows pointer stays hidden; the overlay draws its own"); }
+        } else hidden = 0;
+    }
+    io.MouseDrawCursor = show && cap && g_softCursor.load();
     if (cap) {
         uint32_t b = U.navBits;
         io.NavInputs[ImGuiNavInput_Activate] = (b & PB_A) ? 1.0f : 0.0f;
