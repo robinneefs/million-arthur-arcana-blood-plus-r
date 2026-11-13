@@ -309,23 +309,54 @@ static DWORD g_presentTid = 0;
 // Build 58 (test 57: no mouse pointer): the game hides the Windows pointer. While the
 // overlay has the input we show it again (on the window's own thread, where the
 // pointer's show count lives) and put it back as it was when the overlay lets go.
+// Build 59 (test 58: the pointer vanished after closing and opening a few times):
+// - checked on every window message, not only once, since the game hides it again;
+// - an empty pointer (the game's "no pointer" shape) is replaced by the arrow;
+// - the pointer is kept inside the game window while the overlay is open (and put in
+//   the middle if it was outside), so it can't wander off to another screen unseen;
+// - the overlay's own pointer is only drawn while the Windows one is really hidden.
 static int g_cursorBumps = 0;
-static std::atomic<bool> g_softCursor{false};    // fallback: ImGui draws the pointer itself
-static void UiCursorOnWindowThread(bool cap) {
-    if (cap && !g_softCursor.load()) {
+static bool g_clipped = false;
+static RECT g_oldClip{};
+static std::atomic<bool> g_softCursor{false};    // ImGui draws the pointer itself (set by UiFrame)
+static void UiCursorOnWindowThread(HWND h, bool cap) {
+    if (cap) {
         CURSORINFO ci{};
         ci.cbSize = sizeof ci;
-        if (GetCursorInfo(&ci) && !(ci.flags & CURSOR_SHOWING))
-            for (int i = 0; i < 20 && g_cursorBumps < 40; i++) { g_cursorBumps++; if (ShowCursor(TRUE) >= 0) break; }
-    } else if (!cap && g_cursorBumps) {
+        if (GetCursorInfo(&ci)) {
+            if (!(ci.flags & CURSOR_SHOWING))
+                for (int i = 0; i < 20 && g_cursorBumps < 40; i++) { g_cursorBumps++; if (ShowCursor(TRUE) >= 0) break; }
+            if (!ci.hCursor && !g_softCursor.load()) SetCursor(LoadCursor(nullptr, IDC_ARROW));
+        }
+        if (!g_clipped) {
+            RECT rc;
+            GetClientRect(h, &rc);
+            POINT tl{rc.left, rc.top}, br{rc.right, rc.bottom};
+            ClientToScreen(h, &tl);
+            ClientToScreen(h, &br);
+            RECT scr{tl.x, tl.y, br.x, br.y};
+            if (scr.right - scr.left > 16 && scr.bottom - scr.top > 16) {
+                GetClipCursor(&g_oldClip);
+                POINT p;
+                if (GetCursorPos(&p) && (p.x < scr.left || p.x >= scr.right || p.y < scr.top || p.y >= scr.bottom))
+                    SetCursorPos((scr.left + scr.right) / 2, (scr.top + scr.bottom) / 2);
+                ClipCursor(&scr);
+                g_clipped = true;
+            }
+        }
+    } else {
         while (g_cursorBumps > 0) { ShowCursor(FALSE); g_cursorBumps--; }
+        if (g_clipped) {
+            g_clipped = false;
+            ClipCursor(g_oldClip.right > g_oldClip.left ? &g_oldClip : nullptr);
+        }
     }
 }
 
 static LRESULT CALLBACK UiWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (g_imgui) {
         bool cap = U.capture.load();
-        UiCursorOnWindowThread(cap);
+        UiCursorOnWindowThread(h, cap);
         if (cap || msg == WM_KEYUP || msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) ImGui_ImplWin32_WndProcHandler(h, msg, wp, lp);
         if (cap) {
             switch (msg) {
@@ -809,7 +840,7 @@ static void UiStatusBar(const ImVec2& disp) {
 static void UiFrame(IDirect3DDevice9* dev) {
     ImGuiIO& io = ImGui::GetIO();
     // the mouse pointer is only ours while the overlay has the input
-    if (U.capture.load()) io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+    if (U.capture.load() && !g_softCursor.load()) io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
     else io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
@@ -826,28 +857,38 @@ static void UiFrame(IDirect3DDevice9* dev) {
     }
     bool show = U.visible.load();
     bool cap = U.capture.load();
-    // the Windows pointer (see UiCursorOnWindowThread); if it still isn't visible after
-    // a third of a second, ImGui draws one itself from then on
+    // the Windows pointer (see UiCursorOnWindowThread); while it is hidden for more than
+    // a sixth of a second, ImGui draws one itself (back off once Windows shows it again)
     {
-        static int hidden = 0;
-        static bool logged = false;
+        static int hidden = 0, shown = 0, logs = 0;
+        static bool wasCap = false;
         CURSORINFO ci{};
         ci.cbSize = sizeof ci;
         bool hw = GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING) && ci.hCursor;
-        if (cap && !logged) {
-            logged = true;
+        if (cap && !wasCap && logs < 12) {
+            logs++;
             RECT cr{}, clip{};
             GetClientRect(g_uiHwnd, &cr);
             GetClipCursor(&clip);
             POINT p = ci.ptScreenPos;
             ScreenToClient(g_uiHwnd, &p);
-            Log("ui: mouse: pointer %s (flags %lX), at %ld,%ld in a %ldx%ld window, clip %ld,%ld-%ld,%ld, foreground %s",
-                hw ? "visible" : "hidden", ci.flags, p.x, p.y, cr.right, cr.bottom, clip.left, clip.top, clip.right, clip.bottom,
-                GetForegroundWindow() == g_uiHwnd ? "yes" : "no");
+            Log("ui: mouse: pointer %s (flags %lX, shape %p), at %ld,%ld in a %ldx%ld window, clip %ld,%ld-%ld,%ld, foreground %s, own pointer %s",
+                hw ? "visible" : "hidden", ci.flags, (void*)ci.hCursor, p.x, p.y, cr.right, cr.bottom, clip.left, clip.top, clip.right, clip.bottom,
+                GetForegroundWindow() == g_uiHwnd ? "yes" : "no", g_softCursor.load() ? "on" : "off");
         }
-        if (cap && !hw && !g_softCursor.load()) {
-            if (++hidden > 20) { g_softCursor = true; Log("ui: mouse: the Windows pointer stays hidden; the overlay draws its own"); }
-        } else hidden = 0;
+        wasCap = cap;
+        if (!cap) { hidden = shown = 0; g_softCursor = false; }
+        else if (!g_softCursor.load()) {
+            shown = 0;
+            if (!hw && ++hidden > 10) { g_softCursor = true; if (logs < 40) { logs++; Log("ui: mouse: the Windows pointer is hidden; the overlay draws its own"); } }
+            if (hw) hidden = 0;
+        } else {
+            // our own pointer makes ImGui ask Windows for "no pointer", so only the show count tells
+            hidden = 0;
+            if ((ci.flags & CURSOR_SHOWING) && ++shown > 60) g_softCursor = false;
+            if (!(ci.flags & CURSOR_SHOWING)) shown = 0;
+        }
+        if (g_softCursor.load()) io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;   // don't fight over the shape
     }
     io.MouseDrawCursor = show && cap && g_softCursor.load();
     if (cap) {
