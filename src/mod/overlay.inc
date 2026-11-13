@@ -591,8 +591,15 @@ static void UiLobbyPhase(LbSide& me, const LbSide& them, bool host) {
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 4);
         if (ImGui::Combo("##rounds", &rounds, roundsNames, 5)) { me.rounds = (uint8_t)(rounds + 1); LbChanged(); }
     } else ImGui::Text("%d", rounds + 1);
+    static const char* const timerNames[] = {"value 0 (30 s?)", "value 1", "value 2 (game default)", "value 3"};
+    int timer = me.timer < LB_TIMERS ? me.timer : 2;
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("Round timer");
     ImGui::SameLine();
-    ImGui::TextColored(theme::TextDim(), "(not used by the game yet)");
+    if (host) {
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11);
+        if (ImGui::Combo("##timer", &timer, timerNames, LB_TIMERS)) { me.timer = (uint8_t)timer; LbChanged(); }
+    } else ImGui::Text("%s", timerNames[timer]);
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -619,8 +626,8 @@ static bool UiPickCombo(const char* id, uint8_t* v, int count, bool allowRandom,
     UiDisabledEnd();
     return changed;
 }
-static const char* UiColorName(uint8_t c) { static char b[4][16]; static int k; k = (k + 1) & 3; snprintf(b[k], 16, "Colour %u", c + 1u); return b[k]; }
-static const char* UiAssistName(uint8_t c) { static char b[4][16]; static int k; k = (k + 1) & 3; snprintf(b[k], 16, "Set %u", c + 1u); return b[k]; }
+static const char* UiColorName(uint8_t c) { static char b[4][16]; static int k; k = (k + 1) & 3; snprintf(b[k], 16, "Colour %02X", c); return b[k]; }
+static const char* UiAssistName(uint8_t c) { static char b[4][16]; static int k; k = (k + 1) & 3; snprintf(b[k], 16, "Assist %02X", c); return b[k]; }
 
 static void UiSideColumn(int side, LbSide& s, bool mine, bool present) {
     ImGui::PushStyleColor(ImGuiCol_Text, side == 0 ? theme::P1() : theme::P2());
@@ -636,9 +643,12 @@ static void UiSideColumn(int side, LbSide& s, bool mine, bool present) {
     ImGui::TextColored(theme::TextDim(), "Colour");
     snprintf(id, sizeof id, "##co%d", side);
     if (UiPickCombo(id, &s.p.color, LB_COLORS, false, UiColorName, ed)) LbChanged();
-    ImGui::TextColored(theme::TextDim(), "Assist set");
-    snprintf(id, sizeof id, "##as%d", side);
-    if (UiPickCombo(id, &s.p.assist, LB_ASSISTS, false, UiAssistName, ed)) LbChanged();
+    static const char* const slot[3] = {"Assist (QCB + L)", "Assist (QCB + M)", "Assist (QCB + H)"};
+    for (int k = 0; k < 3; k++) {
+        ImGui::TextColored(theme::TextDim(), "%s", slot[k]);
+        snprintf(id, sizeof id, "##as%d_%d", side, k);
+        if (UiPickCombo(id, &s.p.assist[k], LB_ASSISTS, false, UiAssistName, ed)) LbChanged();
+    }
     ImGui::TextColored(theme::TextDim(), "Stage wish");
     snprintf(id, sizeof id, "##st%d", side);
     if (UiPickCombo(id, &s.p.stage, LB_STAGES, true, LbStageName, ed)) LbChanged();
@@ -649,7 +659,7 @@ static void UiSideColumn(int side, LbSide& s, bool mine, bool present) {
 
 static void UiSetupPhase(LbSide& me, LbSide& them, bool host) {
     UiHeading("Match setup");
-    UiNote("Placeholder lists until the game's own characters and stages are found. If the two stage wishes differ, one of them is picked at random.");
+    UiNote("Build 61: the game's own numbers, names come later. If the two stage wishes differ, one of them is picked at random.");
     ImGui::Spacing();
     if (ImGui::BeginTable("sides", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableNextColumn();
@@ -680,7 +690,7 @@ static void UiSetupPhase(LbSide& me, LbSide& them, bool host) {
 
 static void UiMatchPhase(LbSide& me, bool host) {
     UiHeading("Match settings agreed");
-    UiNote("Build 57 stops here: starting the fight from these settings comes in a later build.");
+    UiNote("Build 61: both games go from the main menu straight to the loading screen and the fight. Close the overlay (F1) to watch.");
     ImGui::Spacing();
     if (!LB.haveSettings) { ImGui::Text("Waiting for player 1's settings..."); return; }
     const MatchSettings& s = LB.s;
@@ -697,10 +707,13 @@ static void UiMatchPhase(LbSide& me, bool host) {
         };
         row("Character", LbCharName(s.chara[0]), LbCharName(s.chara[1]));
         row("Colour", UiColorName(s.color[0]), UiColorName(s.color[1]));
-        row("Assist set", UiAssistName(s.assist[0]), UiAssistName(s.assist[1]));
+        char a0[48], a1[48];
+        snprintf(a0, sizeof a0, "%02X / %02X / %02X", s.assist[0][0], s.assist[0][1], s.assist[0][2]);
+        snprintf(a1, sizeof a1, "%02X / %02X / %02X", s.assist[1][0], s.assist[1][1], s.assist[1][2]);
+        row("Assists", a0, a1);
         ImGui::EndTable();
     }
-    ImGui::Text("Stage: %s    Rounds: %u    Input delay: %u    Match %u", LbStageName(s.stage), s.rounds, s.delay, me.matchNo);
+    ImGui::Text("Stage: %s    Rounds: %u    Timer value: %u    Input delay: %u    Match %u", LbStageName(s.stage), s.rounds, s.timer, s.delay, me.matchNo);
     ImGui::Text("Settings checksum %08X", LB.sum);
     ImGui::SameLine();
     if (LB.confirmed > 0) ImGui::TextColored(theme::Good(), host ? "- same on the other PC" : "- received from player 1");

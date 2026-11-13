@@ -1,4 +1,4 @@
-// Arcana Blood rollback mod - step 3 prototype (test build 60: own overlay for lobby and match setup).
+// Arcana Blood rollback mod - step 3 prototype (test build 61: own overlay for lobby and match setup).
 //
 // What this DLL does once the launcher has loaded it into the game:
 //   1. Waits until Steam's DRM layer has decrypted the game code.
@@ -3043,6 +3043,8 @@ static bool g_netInject = false;     // this input step uses the network inputs
 static bool g_netStall = false;      // this frame waits (no input step, no update)
 static NetAct NetBeforeInput();
 static void NetFill(uint32_t T);
+static void BootInputOverride(uint32_t T, uint32_t in[2][2]);
+static void BootSessionEnd();
 static void NetAfterInput(bool injected);
 static void NetSavePre(const std::vector<uint8_t>& pre);
 static bool NetOn();
@@ -3169,7 +3171,7 @@ static void __cdecl H_KbRead() {
             g_inLastMap[p] = d;
         }
     }
-    if (g_netInject) NetFill(g_frame + 1);
+    if (g_netInject) { NetFill(g_frame + 1); BootInputOverride(g_frame + 1, g_pend.in); }
     else if (g_rbOn) RbLiveInput(g_frame + 1);
     SetExternal(g_pend.in);
     g_devDone = true;
@@ -4273,6 +4275,7 @@ static void AutoTestTick() {
 #include "lobby.inc"
 #include "overlay.inc"
 #include "setup_diag.inc"
+#include "boot.inc"
 
 static void PollHotkeys() {
     HWND hwnd = *reinterpret_cast<HWND*>(addr::G_HWND);
@@ -4376,6 +4379,7 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
         }
     }
     if (!g_netStall) sdiag::Tick();   // build 60: watch-only setup diagnostics
+    if (!g_netStall) boot::Tick();    // build 61: start the fight from the overlay
     PollHotkeys();
     AutoTestTick();
     if (g_netStall) {            // online: waiting for the other player's input
@@ -4656,13 +4660,14 @@ static bool Install() {
               util::WriteRel32(addr::CALL_INTRO_PICK, 0xE8, (void*)H_IntroPick) &&
               util::WriteRel32(addr::CALL_CHILD_UPDATE, 0xE8, (void*)H_ChildUpdate) &&
               HookSaveWrite();
+    if (ok) boot::Install();         // build 61 (optional: the rest works without it)
     Log(ok ? "Hooks installed. Hotkeys: F9 profile, F10 sync test, F11 depth, F8 automatic full test, F7 rollback test with fake lag, F4 connect / disconnect (online), F5 pick a Steam friend." : "Failed to install hooks!");
     SetStatus(ok ? "ready (F9 profile, F10 sync test, F11 depth)" : "hook install failed");
     return ok;
 }
 
 static DWORD WINAPI StartThread(LPVOID) {
-    Log("Arcana Blood rollback mod, step 3 prototype, test build 60. Game pid %lu", GetCurrentProcessId());
+    Log("Arcana Blood rollback mod, step 3 prototype, test build 61. Game pid %lu", GetCurrentProcessId());
     LoadSettings();
     Log("settings: profile_frames=%d depth=%d include_contested=%d heap=%d heap_restore=%d", g_cfg.profileFrames, g_cfg.depth,
         g_cfg.includeContested, g_cfg.heap, g_cfg.heapRestore);

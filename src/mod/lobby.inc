@@ -24,8 +24,9 @@
 // thread in LobbyTick().
 // ===========================================================================
 
-// Placeholder lists until the game's own IDs are found (next builds).
-static const int LB_CHARS = 16, LB_COLORS = 8, LB_ASSISTS = 8, LB_STAGES = 10;
+// Build 61: the game's own ID ranges (character files act/chara 00-0D, assist
+// characters act/partner 00-1E, stages bg/stage00-0C). Names come later.
+static const int LB_CHARS = 14, LB_COLORS = 24, LB_ASSISTS = 31, LB_STAGES = 13, LB_TIMERS = 4;
 static const uint8_t LB_RANDOM = 0xFF;          // "Random" in a pick
 enum LbPhase : uint8_t { LP_LOBBY = 0, LP_SETUP = 1, LP_MATCH = 2, LP_POST = 3 };
 enum LbChoice : uint8_t { LCH_NONE = 0, LCH_REMATCH = 1, LCH_SETUP = 2, LCH_LOBBY = 3, LCH_LEAVE = 4 };
@@ -33,21 +34,21 @@ static const char* const LB_PHASE_NAME[] = {"lobby", "match setup", "match", "af
 static const char* const LB_CHOICE_NAME[] = {"nothing yet", "rematch", "back to match setup", "back to the lobby", "leave"};
 
 #pragma pack(push, 1)
-struct LbPicks { uint8_t chara = 0, color = 0, assist = 0, stage = LB_RANDOM; };
+struct LbPicks { uint8_t chara = 0, color = 0, assist[3] = {0, 1, 2}, stage = LB_RANDOM; };
 struct NLobby {
     NHdr h;
     uint32_t seq, ack;                  // version of this state / newest version of yours I have
     uint8_t phase, ready, locked, choice;
     LbPicks p;
-    uint8_t delay, rounds, pad0, pad1;  // delay / rounds: player 1's settings
+    uint8_t delay, rounds, timer, pad1; // delay / rounds / timer: player 1's settings
     uint32_t matchNo;                   // the match the phase belongs to
     uint32_t choiceMatch;               // the match the choice was made after
     char name[32];
 };
 struct MatchSettings {
     uint32_t matchNo;
-    uint8_t chara[2], color[2], assist[2];
-    uint8_t stage, rounds, delay, pad[3];
+    uint8_t chara[2], color[2], assist[2][3];
+    uint8_t stage, rounds, delay, timer;
     uint32_t seed;
 };
 struct NStart { NHdr h; MatchSettings s; };
@@ -61,7 +62,7 @@ struct LbSide {
     bool ready = false, locked = false;
     uint8_t choice = LCH_NONE;
     LbPicks p;
-    uint8_t delay = 2, rounds = 2;
+    uint8_t delay = 2, rounds = 2, timer = 2;
     uint32_t matchNo = 0;
     uint32_t choiceMatch = 0;           // the choice stays visible after it happened, so the other PC can follow
     char name[32] = "";
@@ -105,7 +106,7 @@ static const char* LbCharName(uint8_t c) {
     static int k = 0;
     if (c == LB_RANDOM) return "Random";
     k = (k + 1) & 3;
-    snprintf(buf[k], sizeof buf[k], "Character %u", c + 1u);
+    snprintf(buf[k], sizeof buf[k], "Character %02X", c);
     return buf[k];
 }
 static const char* LbStageName(uint8_t s) {
@@ -113,11 +114,18 @@ static const char* LbStageName(uint8_t s) {
     static int k = 0;
     if (s == LB_RANDOM) return "Random";
     k = (k + 1) & 3;
-    snprintf(buf[k], sizeof buf[k], "Stage %u", s + 1u);
+    snprintf(buf[k], sizeof buf[k], "Stage %02X", s);
     return buf[k];
 }
 
 
+
+static void LbNoteStart() {
+    const MatchSettings& m = LB.s;
+    LbNote("match %u starts: %s (colour %u, assists %u/%u/%u) vs %s (colour %u, assists %u/%u/%u), %s, rounds %u, timer %u, checksum %08X",
+           m.matchNo, LbCharName(m.chara[0]), m.color[0] + 1u, m.assist[0][0], m.assist[0][1], m.assist[0][2], LbCharName(m.chara[1]),
+           m.color[1] + 1u, m.assist[1][0], m.assist[1][1], m.assist[1][2], LbStageName(m.stage), m.rounds, m.timer, LB.sum);
+}
 
 static void LbReset() {
     EnterCriticalSection(&g_lobbyLock);
@@ -143,6 +151,7 @@ static void LbSend() {
     m.p = LB.me.p;
     m.delay = LB.me.delay;
     m.rounds = LB.me.rounds;
+    m.timer = LB.me.timer;
     m.matchNo = LB.me.matchNo;
     m.choiceMatch = LB.me.choiceMatch;
     memcpy(m.name, LB.me.name, sizeof m.name);
@@ -169,6 +178,7 @@ static void LbHandle(const uint8_t* p, int n) {
             t.p = m->p;
             t.delay = m->delay;
             t.rounds = m->rounds;
+            t.timer = m->timer < LB_TIMERS ? m->timer : 2;
             t.matchNo = m->matchNo;
             t.choiceMatch = m->choiceMatch;
             memcpy(t.name, m->name, sizeof t.name);
@@ -192,9 +202,7 @@ static void LbHandle(const uint8_t* p, int n) {
             LB.me.matchNo = LB.s.matchNo;
             LB.me.choice = LCH_NONE;
             LbChanged();
-            LbNote("match %u starts: %s (colour %u, set %u) vs %s (colour %u, set %u), %s, settings checksum %08X",
-                   LB.s.matchNo, LbCharName(LB.s.chara[0]), LB.s.color[0] + 1u, LB.s.assist[0] + 1u, LbCharName(LB.s.chara[1]),
-                   LB.s.color[1] + 1u, LB.s.assist[1] + 1u, LbStageName(LB.s.stage), LB.sum);
+            LbNoteStart();
         }
         NStartAck a{};
         a.h = MakeHdr(M_STARTACK);
@@ -223,12 +231,13 @@ static void LbMakeSettings() {
     for (int i = 0; i < 2; i++) {
         s.chara[i] = pk[i]->chara == LB_RANDOM ? (uint8_t)rnd(LB_CHARS) : pk[i]->chara;
         s.color[i] = pk[i]->color;
-        s.assist[i] = pk[i]->assist;
+        for (int k = 0; k < 3; k++) s.assist[i][k] = pk[i]->assist[k] < LB_ASSISTS ? pk[i]->assist[k] : 0;
     }
     uint8_t a = pk[0]->stage, b = pk[1]->stage;
     uint8_t st = a == b ? a : (rnd(2) ? a : b);       // each picks; the game chooses one of the two
     s.stage = st == LB_RANDOM ? (uint8_t)rnd(LB_STAGES) : st;
     s.rounds = LB.me.rounds;
+    s.timer = LB.me.timer;
     s.delay = LB.me.delay;
     LB.s = s;
     LB.sum = LbSum(s);
@@ -257,6 +266,7 @@ static void LobbyTick() {
     if (LB.haveThem && !leave) {
         if (!host && them.delay != me.delay) { me.delay = them.delay; }      // player 1's settings
         if (!host && them.rounds != me.rounds) { me.rounds = them.rounds; }
+        if (!host && them.timer != me.timer) { me.timer = them.timer; }
         switch (me.phase) {
         case LP_LOBBY:
             if (me.ready && them.ready && (them.phase == LP_LOBBY || them.phase == LP_SETUP)) {
@@ -289,9 +299,7 @@ static void LobbyTick() {
                     LbChanged();
                     LbSendStart();
                     g_lbLastStartSend = now;
-                    LbNote("match %u starts: %s (colour %u, set %u) vs %s (colour %u, set %u), %s, settings checksum %08X",
-                           LB.s.matchNo, LbCharName(LB.s.chara[0]), LB.s.color[0] + 1u, LB.s.assist[0] + 1u, LbCharName(LB.s.chara[1]),
-                           LB.s.color[1] + 1u, LB.s.assist[1] + 1u, LbStageName(LB.s.stage), LB.sum);
+                    LbNoteStart();
                 }
             }
             break;

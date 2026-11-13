@@ -1,0 +1,223 @@
+// ===========================================================================
+// Build 61: start the fight straight from our overlay (included into mod.cpp
+// after lobby.inc).
+// ===========================================================================
+// When both PCs have the agreed match settings (lobby phase "match"), each
+// game, while it shows the main menu, does what the game itself does for a
+// Versus match, but skips character select:
+//
+//  1. Main menu: set the mode the way the title menu does for Versus
+//     (0x04DC9650 = 2, 0x04DC9640 = 1, sides 0x04DC8A04 = 3) and tell
+//     "game main" that both sides are now human (+0x0C = 3). "Game main"
+//     then asks 0x5BB170 which screen comes next; for Versus that is
+//     character select (3).
+//  2. Our hook on that call (0x5BE29D) writes both players' setup blocks
+//     (0x04DC9658 + p*0x200: +0x04 character, +0x08/0C/10 the 3 assists,
+//     +0x14 colour, +0x30 stage, as character select would) and changes the
+//     answer to the loading screen (0x24).
+//  3. Loading screen: its assist set menu still runs. Both players' input is
+//     replaced by an A press every 16 frames (the same on both PCs, it is a
+//     synced screen), so the menu confirms by itself and the "VS" screen
+//     moves on. When the menu has copied its preset into the setup blocks,
+//     our 3 assists are written over it, before the fight reads them.
+//  4. Rounds and timer: the game's options (0x04DCAD04 / 0x04DCAD08) are set
+//     for the match and put back when the session ends.
+// ===========================================================================
+
+namespace boot {
+
+enum State : uint8_t { B_IDLE = 0, B_WAIT_TITLE, B_SWITCHING, B_LOADING, B_FIGHT };
+static const char* const STATE_NAME[] = {"idle", "waiting for the main menu", "switching", "loading screen", "fight"};
+
+static const uint32_t VT_TITLE = 0x008D2CBC, VT_LOADING = 0x008D2604;
+static const uint32_t SETUP = 0x04DC9658, SETUP_STRIDE = 0x200;
+static const uint32_t FIGHT_ASSISTS = 0x04B79560;  // fight setup copy, 3 per player (stride 0xC)
+static const uint32_t OPT_ROUNDS = 0x04DCAD04, OPT_TIMER = 0x04DCAD08;
+static const uint32_t CALL_NEXT_SCREEN = 0x005BE29D;  // game main -> 0x5BB170 (which screen after a side change)
+static const uint8_t EXPECT_CALL_NEXT_SCREEN[] = {0xE8, 0xCE, 0xCE, 0xFF, 0xFF};
+static const uint32_t FN_NEXT_SCREEN = 0x005BB170;
+
+static State st = B_IDLE;
+static MatchSettings s{};
+static uint32_t bootedMatch = 0, stateFrames = 0, loadingFrames = 0;
+static bool optSaved = false;
+static uint32_t optRounds = 0, optTimer = 0;
+static int assistFixes = 0;
+static bool hooked = false;
+
+static inline uint32_t& U32(uint32_t a) { return *reinterpret_cast<uint32_t*>(a); }
+static void SetState(State n) {
+    if (n != st) Log("boot: %s -> %s", STATE_NAME[st], STATE_NAME[n]);
+    st = n;
+    stateFrames = 0;
+}
+
+static void WriteAssists() {
+    for (int p = 0; p < 2; p++)
+        for (int k = 0; k < 3; k++) {
+            U32(SETUP + p * SETUP_STRIDE + 0x08 + k * 4) = s.assist[p][k];
+            U32(FIGHT_ASSISTS + p * 0xC + k * 4) = s.assist[p][k];
+        }
+}
+static bool AssistsOk() {
+    for (int p = 0; p < 2; p++)
+        for (int k = 0; k < 3; k++)
+            if (U32(SETUP + p * SETUP_STRIDE + 0x08 + k * 4) != s.assist[p][k] || U32(FIGHT_ASSISTS + p * 0xC + k * 4) != s.assist[p][k])
+                return false;
+    return true;
+}
+
+static void WriteSetupBlocks() {
+    for (int p = 0; p < 2; p++) {
+        uint32_t b = SETUP + p * SETUP_STRIDE;
+        U32(b + 0x00) = 1;
+        U32(b + 0x04) = s.chara[p];
+        U32(b + 0x14) = s.color[p];
+        U32(b + 0x18) = 0;              // human (the CPU match had 1 here for player 2)
+        U32(b + 0x1C) = 0;
+        U32(b + 0x30) = s.stage;
+        U32(b + 0x78) = 0x00010000;
+        U32(b + 0x7C) = 0x00010000;
+    }
+    WriteAssists();
+    Log("boot: setup written: P1 character %u colour %u assists %u/%u/%u, P2 character %u colour %u assists %u/%u/%u, stage %u",
+        s.chara[0], s.color[0], s.assist[0][0], s.assist[0][1], s.assist[0][2],
+        s.chara[1], s.color[1], s.assist[1][0], s.assist[1][1], s.assist[1][2], s.stage);
+}
+
+// Replaces "game main"'s call of 0x5BB170 (thiscall, 3 stack args, callee pops).
+typedef void(__attribute__((thiscall)) * NextScreenFn)(void*, void*, int*, int);
+static void __attribute__((thiscall)) H_NextScreen(void* self, void* blk, int* next, int a3) {
+    reinterpret_cast<NextScreenFn>(FN_NEXT_SCREEN)(self, blk, next, a3);
+    if (st != B_SWITCHING) return;
+    Log("boot: the game chose screen %d after the side change", next ? *next : -1);
+    if (next && *next == 3) {
+        WriteSetupBlocks();
+        *next = 0x24;                    // the loading screen instead of character select
+        assistFixes = 0;
+        loadingFrames = 0;
+        SetState(B_LOADING);
+    } else {
+        Log("boot: not the expected character select (3); leaving the game's choice");
+        SetState(B_IDLE);
+    }
+}
+
+static bool Install() {
+    if (!util::BytesMatch(CALL_NEXT_SCREEN, EXPECT_CALL_NEXT_SCREEN, sizeof EXPECT_CALL_NEXT_SCREEN)) {
+        Log("boot: unexpected bytes at 0x%08X, starting fights from the overlay is OFF", CALL_NEXT_SCREEN);
+        return false;
+    }
+    hooked = util::WriteRel32(CALL_NEXT_SCREEN, 0xE8, (void*)H_NextScreen);
+    Log("boot: next-screen hook %s", hooked ? "installed" : "FAILED");
+    return hooked;
+}
+
+// The lobby has agreed settings for a new match: boot it.
+static void Request(const MatchSettings& ms) {
+    if (!hooked) return;
+    if (ms.matchNo == bootedMatch && st != B_IDLE) return;
+    s = ms;
+    bootedMatch = ms.matchNo;
+    SetState(B_WAIT_TITLE);
+    Log("boot: match %u requested", ms.matchNo);
+}
+
+// Every game frame, before the update (game thread).
+static void Tick() {
+    if (!hooked) return;
+    stateFrames++;
+    if (NetOn()) {                       // a new agreed match -> boot it
+        EnterCriticalSection(&g_lobbyLock);
+        bool go = LB.me.phase == LP_MATCH && LB.haveSettings && LB.s.matchNo == LB.me.matchNo &&
+                  (N.side == 1 || LB.confirmed > 0) && LB.s.matchNo != bootedMatch;
+        MatchSettings ms = LB.s;
+        LeaveCriticalSection(&g_lobbyLock);
+        if (go) Request(ms);
+    }
+    uint32_t vt, ptr;
+    CurScreen(&vt, &ptr);
+    switch (st) {
+    case B_IDLE: break;
+    case B_WAIT_TITLE:
+        if (!NetOn()) { SetState(B_IDLE); break; }
+        if (vt != VT_TITLE) {
+            if (stateFrames % 600 == 1) Log("boot: waiting for the main menu (now on %s)", addr::SceneName(vt));
+            break;
+        }
+        if (stateFrames < 10) break;     // let the title settle
+        {
+            uint32_t scene = U32(addr::G_MAIN_SCENE);
+            if (!scene || U32(scene) != VT_GAMEMAIN) break;
+            if (!optSaved) { optRounds = U32(OPT_ROUNDS); optTimer = U32(OPT_TIMER); optSaved = true; }
+            U32(OPT_ROUNDS) = s.rounds >= 1 ? s.rounds - 1u : 0u;
+            U32(OPT_TIMER) = s.timer;
+            U32(0x04DC9650) = 2;         // Versus
+            U32(0x04DC9640) = 1;
+            U32(0x04DC8A04) = 3;         // both sides human
+            Log("boot: main menu: Versus set (options rounds %u, timer %u; were %u, %u); game main sides %u/%u -> 3",
+                U32(OPT_ROUNDS), U32(OPT_TIMER), optRounds, optTimer, U32(scene + 0x0C), U32(scene + 0x10));
+            U32(scene + 0x0C) = 3;
+            if (U32(scene + 0x10) == 3) U32(scene + 0x10) = 0;   // make sure the game sees a change
+            SetState(B_SWITCHING);
+        }
+        break;
+    case B_SWITCHING:
+        if (stateFrames > 120) {
+            Log("boot: the game did not switch screens within 2 s (still on %s); giving up", addr::SceneName(vt));
+            SetState(B_IDLE);
+        }
+        break;
+    case B_LOADING:
+        if (vt == VT_LOADING) loadingFrames++;
+        if (vt == SCENE_BTL) {
+            Log("boot: fight starts after %u loading-screen frames; assists rewritten %d times", loadingFrames, assistFixes);
+            if (!AssistsOk()) { WriteAssists(); Log("boot: assists were different at fight start, written again"); }
+            SetState(B_FIGHT);
+            break;
+        }
+        if (vt == VT_LOADING && !AssistsOk()) {
+            Log("boot: loading frame %u: the set menu wrote P1 %u/%u/%u P2 %u/%u/%u; writing ours again", loadingFrames,
+                U32(SETUP + 0x08), U32(SETUP + 0x0C), U32(SETUP + 0x10),
+                U32(SETUP + SETUP_STRIDE + 0x08), U32(SETUP + SETUP_STRIDE + 0x0C), U32(SETUP + SETUP_STRIDE + 0x10));
+            WriteAssists();
+            assistFixes++;
+        }
+        if (stateFrames > 60 * 60) { Log("boot: still not in the fight after 60 s (on %s)", addr::SceneName(vt)); SetState(B_IDLE); }
+        break;
+    case B_FIGHT:
+        if (vt != SCENE_BTL && vt) {
+            Log("boot: the fight screen ended (now %s); the game's own after-match flow runs (build 62 replaces it)", addr::SceneName(vt));
+            SetState(B_IDLE);
+        }
+        break;
+    }
+}
+
+// Online, on the booted loading screen: both players "press A" every 16
+// frames, so the assist set menu and the VS screen go on by themselves.
+// T is the synced screen frame, the same on both PCs.
+static void InputOverride(uint32_t T, uint32_t in[2][2]) {
+    if (st != B_LOADING) return;
+    uint32_t vt, ptr;
+    CurScreen(&vt, &ptr);
+    if (vt != VT_LOADING) return;
+    uint32_t a = (T >= 30 && T % 16 < 2) ? 0x1000u : 0u;
+    for (int p = 0; p < 2; p++) { in[p][0] = a; in[p][1] = 0; }
+}
+
+static void SessionEnd() {
+    if (optSaved) {
+        U32(OPT_ROUNDS) = optRounds;
+        U32(OPT_TIMER) = optTimer;
+        optSaved = false;
+        Log("boot: options rounds/timer put back (%u, %u)", optRounds, optTimer);
+    }
+    if (st != B_IDLE) SetState(B_IDLE);
+    bootedMatch = 0;
+}
+
+} // namespace boot
+
+static void BootSessionEnd() { boot::SessionEnd(); }
+static void BootInputOverride(uint32_t T, uint32_t in[2][2]) { boot::InputOverride(T, in); }
