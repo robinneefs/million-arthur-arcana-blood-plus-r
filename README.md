@@ -1,12 +1,10 @@
-# million-arthur-arcana-blood-plus-r
+# Million Arthur: Arcana Blood +R
 
-Million Arthur Arcana Blood +R, a rollback netcode mod.
-
-The mod adds rollback netcode to Million Arthur: Arcana Blood on Steam, with its own in-game overlay for setting up matches. It runs alongside the game: a small launcher starts the game and loads the mod, and nothing in the game folder is changed.
+A mod that adds rollback netcode to the Steam version of Million Arthur: Arcana Blood.
 
 ## Status
 
-Work in progress, not ready to play yet.
+**Work in progress, not ready to play yet.**
 
 - Done: saving and restoring the game state every frame, sync tests, rollback with fake lag, online play between two PCs on a home network.
 - In progress: our own match setup overlay (lobby, controls, character, colour, assist and stage select, rematch). Build 57 has the screens and the setup protocol but does not start a fight from them yet.
