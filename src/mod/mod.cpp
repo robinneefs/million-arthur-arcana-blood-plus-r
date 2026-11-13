@@ -1,4 +1,4 @@
-// Arcana Blood rollback mod - step 3 prototype (test build 59: own overlay for lobby and match setup).
+// Arcana Blood rollback mod - step 3 prototype (test build 60: own overlay for lobby and match setup).
 //
 // What this DLL does once the launcher has loaded it into the game:
 //   1. Waits until Steam's DRM layer has decrypted the game code.
@@ -4272,6 +4272,7 @@ static void AutoTestTick() {
 #include "net_session.inc"
 #include "lobby.inc"
 #include "overlay.inc"
+#include "setup_diag.inc"
 
 static void PollHotkeys() {
     HWND hwnd = *reinterpret_cast<HWND*>(addr::G_HWND);
@@ -4374,6 +4375,7 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
             lastChild = cptr;
         }
     }
+    if (!g_netStall) sdiag::Tick();   // build 60: watch-only setup diagnostics
     PollHotkeys();
     AutoTestTick();
     if (g_netStall) {            // online: waiting for the other player's input
@@ -4660,7 +4662,7 @@ static bool Install() {
 }
 
 static DWORD WINAPI StartThread(LPVOID) {
-    Log("Arcana Blood rollback mod, step 3 prototype, test build 59. Game pid %lu", GetCurrentProcessId());
+    Log("Arcana Blood rollback mod, step 3 prototype, test build 60. Game pid %lu", GetCurrentProcessId());
     LoadSettings();
     Log("settings: profile_frames=%d depth=%d include_contested=%d heap=%d heap_restore=%d", g_cfg.profileFrames, g_cfg.depth,
         g_cfg.includeContested, g_cfg.heap, g_cfg.heapRestore);
