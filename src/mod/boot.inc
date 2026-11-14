@@ -267,6 +267,18 @@ static void Tick() {
                 lastState = fs;
             }
         }
+        // Build 65 (test 64b, LAN): the box was answered (phase 9) but the fight screen
+        // kept waiting with the box on screen. Once the result is in (phase 9), tell the
+        // fight screen it is finished (its own "done" flag, +0x28): its next update ends
+        // the fight the normal way and our after-fight hook takes over.
+        if (vt == SCENE_BTL && ptr && U32(FIGHT_PHASE) == 9 && skipBox) {
+            uint8_t& done = *reinterpret_cast<uint8_t*>(ptr + 0x28);
+            if (!done) {
+                done = 1;
+                static int logs = 0;
+                if (logs++ < 20) Log("boot: fight frame %u: result is in, ending the fight screen", stateFrames);
+            }
+        }
         if (vt != SCENE_BTL && vt) {
             Log("boot: the fight screen ended (now %s) without our after-fight hook; the game's own after-match flow runs", addr::SceneName(vt));
             SetState(B_IDLE);
