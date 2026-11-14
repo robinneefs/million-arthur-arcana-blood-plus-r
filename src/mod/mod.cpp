@@ -1,4 +1,4 @@
-// Arcana Blood rollback mod - step 3 prototype (test build 65: own overlay for lobby and match setup).
+// Arcana Blood rollback mod - step 3 prototype (test build 66: own overlay for lobby and match setup).
 //
 // What this DLL does once the launcher has loaded it into the game:
 //   1. Waits until Steam's DRM layer has decrypted the game code.
@@ -4274,7 +4274,6 @@ static void AutoTestTick() {
 #include "net_session.inc"
 #include "lobby.inc"
 #include "overlay.inc"
-#include "setup_diag.inc"
 #include "boot.inc"
 
 static void PollHotkeys() {
@@ -4378,13 +4377,11 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
             lastChild = cptr;
         }
     }
-    if (!g_netStall) sdiag::Tick();   // build 60: watch-only setup diagnostics
     if (!g_netStall) boot::Tick();    // build 61: start the fight from the overlay
     PollHotkeys();
     AutoTestTick();
     if (g_netStall) {            // online: waiting for the other player's input
         g_tick++;
-        NetScreenDiag(true);
         NetFrameEnd(nullptr);
         return 0;
     }
@@ -4400,7 +4397,6 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
     else {
         g_childRan = false;
         r = RunUpdate(scene);
-        NetScreenDiag(false);
     }
     NetFrameEnd(scene);
     return r;
@@ -4667,7 +4663,7 @@ static bool Install() {
 }
 
 static DWORD WINAPI StartThread(LPVOID) {
-    Log("Arcana Blood rollback mod, step 3 prototype, test build 65. Game pid %lu", GetCurrentProcessId());
+    Log("Arcana Blood rollback mod, step 3 prototype, test build 66. Game pid %lu", GetCurrentProcessId());
     LoadSettings();
     Log("settings: profile_frames=%d depth=%d include_contested=%d heap=%d heap_restore=%d", g_cfg.profileFrames, g_cfg.depth,
         g_cfg.includeContested, g_cfg.heap, g_cfg.heapRestore);

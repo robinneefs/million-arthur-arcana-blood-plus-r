@@ -304,8 +304,8 @@ static void LobbyTick() {
             }
             break;
         case LP_MATCH:
-            // Build 57: no fight yet. "Pretend the match ended" (overlay) moves
-            // this side on; the other side follows.
+            // The fight ends through boot.inc (after-fight hook), or by hand with
+            // "Stuck? End this match" in the overlay; the other side follows.
             if (them.phase == LP_POST && them.matchNo == me.matchNo) {
                 me.phase = LP_POST;
                 me.choice = LCH_NONE;

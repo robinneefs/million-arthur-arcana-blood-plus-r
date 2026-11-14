@@ -21,7 +21,7 @@
 enum : uint8_t { M_HELLO = 1, M_INPUT = 2, M_FP = 3, M_RAW = 4, M_PING = 5, M_PONG = 6, M_BYE = 7, M_SURV = 8, M_SPAGE = 9, M_SAVE = 10, M_SAVEACK = 11,
                  M_LOBBY = 12, M_START = 13, M_STARTACK = 14 };   // build 57: lobby.inc
 static const uint32_t NET_MAGIC = 0x33425241;   // "ARB3"
-static const uint32_t NET_PROTO = 1, NET_BUILD = 65;
+static const uint32_t NET_PROTO = 1, NET_BUILD = 66;
 // Build 57: lobby and match setup (lobby.inc) and the overlay (overlay.inc)
 static void LbHandle(const uint8_t* p, int n);
 static void LobbyTick();
@@ -110,9 +110,6 @@ static struct NetS {
     // Build 49: input check log for the first part of each fight (assist menu, test 48)
     uint32_t diagN = 0, diagRaw0 = 0xFFFFFFFFu, diagRaw1 = 0xFFFFFFFFu, diagHeld0 = 0xFFFFFFFFu, diagHeld1 = 0xFFFFFFFFu;
     int diagFg = -1;
-    // Build 51: screen check (character select loading)
-    uint32_t scrT0 = 0, scrLines = 0, scrLastFp = 0, scrLastState = 0xFFFFFFFFu, scrLastOv = 0xFFFFFFFFu;
-    int scrLastChild = -1, scrLastStall = -1;
     bool noTrackRetry = false;          // build 43: check retried with tracking off in this fight
     int trackingWas = -1;               // tracking setting to put back at the next fight
     // the other game
@@ -227,12 +224,11 @@ static void CurScreen(uint32_t* vtOut, uint32_t* ptrOut) {
     *ptrOut = child;
 }
 static bool IsSyncedScene(uint32_t vt) {
-    // Build 55 (test 54): the loading screen after character select runs the
-    // fight's own pre-fight part, including the assist set menu (CMLLoading's
-    // update -> 0x4360C0 -> 0x431CA0 -> fight update 0x432F30 -> 0x610880), so
-    // it has to run in step too.
-    return vt == 0x008D1BF8 /*CharaSel*/ || vt == 0x008D2604 /*Loading*/ || vt == SCENE_BTL || vt == 0x008D2414 /*Winner*/ ||
-           vt == 0x008D27DC /*NextStage*/ || vt == 0x008D19B0 /*AnotherSelect*/;
+    // The loading screen runs the fight's own pre-fight part, including the assist
+    // set menu (CMLLoading's update -> 0x4360C0 -> 0x431CA0 -> fight update 0x432F30
+    // -> 0x610880), so it runs in step like the fight. Build 66: the game's own menus
+    // (character select, winner screen ...) are no longer used online, so only these two.
+    return vt == 0x008D2604 /*Loading*/ || vt == SCENE_BTL;
 }
 static bool NetIgnoreSrand() {
     if (NetOn() && N.syncedType) { N.srandIgnored++; return true; }
@@ -798,11 +794,6 @@ static void NetResetScreen() {
     N.diagN = 0;
     N.diagRaw0 = N.diagRaw1 = N.diagHeld0 = N.diagHeld1 = 0xFFFFFFFFu;
     N.diagFg = -1;
-    N.scrT0 = GetTickCount();
-    N.scrLines = 0;
-    N.scrLastFp = 0;
-    N.scrLastState = N.scrLastOv = 0xFFFFFFFFu;
-    N.scrLastChild = N.scrLastStall = -1;
 }
 static void NetApplyLayouts() {
     // Both PCs: player 1 uses player 1's own layout, player 2 player 2's,
@@ -1374,63 +1365,8 @@ static NetAct NetBeforeInput() {
     }
     return NetAct::Inject;
 }
-// Build 51: what the game does in the first 30 s of each character select
-// (test 50: the laptop still showed its loading screen while frames counted).
-// Logged when something changes, plus every 30 frames: whether the screen's own
-// update ran this frame, the overlay scene, the screen's state number and a
-// checksum of the screen object (pointer-like values left out). Compare the two
-// PCs' logs frame by frame to see where they part.
-static bool g_childRan = false;
+static bool g_childRan = false;              // the current screen's own update ran this frame
 static uint32_t HeldMask(uint32_t pad);
-// Build 53: which pads the game sees pressed in character select and the
-// assist set menu (test 52: the laptop's player still can't pick an assist set).
-static void NetMenuPadDiag() {
-    static uint32_t last[10], lastSlot = 0xFFFFFFFFu, lines = 0;
-    if (lines >= 300 || g_frame > 7200) return;
-    uint32_t h[10];
-    bool change = false;
-    for (uint32_t i = 0; i < 10; i++) { h[i] = HeldMask(i); if (h[i] != last[i]) change = true; }
-    uint32_t slot = *reinterpret_cast<const uint8_t*>(0x051D325B);
-    if (slot != lastSlot) change = true;
-    if (!change) return;
-    lines++;
-    const uint32_t* map = reinterpret_cast<const uint32_t*>(0x051E3DA8);
-    Log("menu pads: frame %u: held %05X %05X %05X %05X %05X %05X %05X %05X %05X %05X; menu slot %u; slot map %X %X %X %X %X %X %X %X %X %X",
-        g_frame, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], slot,
-        map[0], map[1], map[2], map[3], map[4], map[5], map[6], map[7], map[8], map[9]);
-    memcpy(last, h, sizeof last);
-    lastSlot = slot;
-}
-static void NetScreenDiag(bool stalled) {
-    if (N.st != NS_ON || !N.syncedType) return;
-    if (N.sceneVt == 0x008D2604 /*Loading*/) { if (!stalled && N.synced) NetMenuPadDiag(); return; }
-    if (N.sceneVt != 0x008D1BF8 /*CharaSel*/) return;
-    if (!stalled && N.synced) NetMenuPadDiag();
-    if (N.scrLines >= 400 || g_frame > 1800) return;
-    uint32_t ov = *reinterpret_cast<uint32_t*>(addr::G_OVERLAY_SCENE);
-    uint32_t ovVt = ov ? *reinterpret_cast<uint32_t*>(ov) : 0;
-    const uint8_t* c = reinterpret_cast<const uint8_t*>(N.scenePtr);
-    uint32_t state = c ? *reinterpret_cast<const uint32_t*>(c + 0x2C) : 0;
-    uint32_t fp = 2166136261u;
-    if (c) for (uint32_t o = 0x08; o < 0x8B0; o += 4) {
-        uint32_t v = *reinterpret_cast<const uint32_t*>(c + o);
-        if (v >= 0x00400000u) v = 0;
-        fp = (fp ^ v) * 16777619u;
-    }
-    int child = stalled ? -1 : (g_childRan ? 1 : 0);
-    bool change = (int)stalled != N.scrLastStall || ovVt != N.scrLastOv || state != N.scrLastState || (!stalled && child != N.scrLastChild);
-    if (change || (!stalled && g_frame % 30 == 0 && fp != N.scrLastFp)) {
-        N.scrLines++;
-        Log("screen check: frame %u %s%s, screen update %s, overlay %s, state %u, screen checksum %08X, %u ms after this PC got here",
-            g_frame, stalled ? "WAITING" : "ran", N.synced ? "" : N.ready ? " (loaded, waiting for the other PC)" : " (loading, not counted)", stalled ? "-" : (g_childRan ? "ran" : "SKIPPED by the game"),
-            ovVt ? addr::SceneName(ovVt) : "none", state, fp, GetTickCount() - N.scrT0);
-        N.scrLastFp = fp;
-    }
-    N.scrLastStall = stalled;
-    N.scrLastOv = ovVt;
-    N.scrLastState = state;
-    if (!stalled) N.scrLastChild = child;
-}
 // Called from the keyboard-read hook in the first run of frame T's input step.
 static void NetFill(uint32_t T) {
     uint32_t d = N.localDev;
