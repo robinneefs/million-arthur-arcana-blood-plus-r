@@ -11,6 +11,7 @@ This is a short overview for people (or AIs) who want to build on the mod.
   - `net_session.inc`: online sessions (connect, input exchange, rollback timing, clock sync).
   - `transport.cpp` / `transport.h`: the network layer (loopback stand-in, home network UDP, Steam).
   - `lobby.inc`: the match setup protocol between the two players (lobby, ready, picks, start, rematch).
+  - `boot.inc`: starts the fight from the overlay's settings and brings both players back to the overlay afterwards.
   - `overlay.inc`: the in-game overlay (Dear ImGui on the game's Direct3D 9 device).
   - `ui_theme.h`: every colour, font and size of the overlay, in one file.
   - `util.cpp` / `util.h`: logging, ini reading, small helpers.
@@ -27,6 +28,10 @@ Each frame both PCs send their inputs for the coming frames, plus how far ahead 
 ## Match setup
 
 The overlay does the whole match setup itself: connect, lobby and ready, controls, character, colour, assist and stage picks, and rematch. Each side sends its full lobby state until the other confirms it. When both are ready, player 1 sends the final settings with a checksum and player 2 confirms them. The game's own menus and online lobbies are not used.
+
+## Booting into the fight
+
+When the match setup is final, the mod takes the game from its main menu to the screen change that would normally open character select. At that point it writes both players' character, colour, assists and stage into the game's own match settings and sends the game to the loading screen instead, so the fight starts right away. During the fight the game's own "Request rematch?" box is answered for both players, and when the result is in the mod ends the fight screen and sends the game back to its main menu. There the overlay opens again with Rematch and Back to lobby. Online, only the loading screen and the fight are kept in step between the two PCs; everything before and after is handled by the overlay.
 
 ## Settings
 
