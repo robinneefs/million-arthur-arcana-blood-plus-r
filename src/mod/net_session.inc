@@ -21,7 +21,7 @@
 enum : uint8_t { M_HELLO = 1, M_INPUT = 2, M_FP = 3, M_RAW = 4, M_PING = 5, M_PONG = 6, M_BYE = 7, M_SURV = 8, M_SPAGE = 9, M_SAVE = 10, M_SAVEACK = 11,
                  M_LOBBY = 12, M_START = 13, M_STARTACK = 14 };   // build 57: lobby.inc
 static const uint32_t NET_MAGIC = 0x33425241;   // "ARB3"
-static const uint32_t NET_PROTO = 1, NET_BUILD = 62;
+static const uint32_t NET_PROTO = 1, NET_BUILD = 63;
 // Build 57: lobby and match setup (lobby.inc) and the overlay (overlay.inc)
 static void LbHandle(const uint8_t* p, int n);
 static void LobbyTick();

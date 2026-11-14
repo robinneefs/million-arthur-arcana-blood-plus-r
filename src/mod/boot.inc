@@ -26,8 +26,8 @@
 
 namespace boot {
 
-enum State : uint8_t { B_IDLE = 0, B_WAIT_TITLE, B_SWITCHING, B_LOADING, B_FIGHT };
-static const char* const STATE_NAME[] = {"idle", "waiting for the main menu", "switching", "loading screen", "fight"};
+enum State : uint8_t { B_IDLE = 0, B_WAIT_TITLE, B_SWITCHING, B_LOADING, B_FIGHT, B_AFTER };
+static const char* const STATE_NAME[] = {"idle", "waiting for the main menu", "switching", "loading screen", "fight", "back to the main menu"};
 
 static const uint32_t VT_TITLE = 0x008D2CBC, VT_LOADING = 0x008D2604;
 static const uint32_t SETUP = 0x04DC9658, SETUP_STRIDE = 0x200;
@@ -36,6 +36,11 @@ static const uint32_t OPT_ROUNDS = 0x04DCAD04, OPT_TIMER = 0x04DCAD08;
 static const uint32_t CALL_NEXT_SCREEN = 0x005BE29D;  // game main -> 0x5BB170 (which screen after a side change)
 static const uint8_t EXPECT_CALL_NEXT_SCREEN[] = {0xE8, 0xCE, 0xCE, 0xFF, 0xFF};
 static const uint32_t FN_NEXT_SCREEN = 0x005BB170;
+// Build 63: game main -> 0x5BB9B0, "the fight screen finished, which screen next"
+static const uint32_t CALL_BTL_FINISHED = 0x005BE405;
+static const uint8_t EXPECT_CALL_BTL_FINISHED[] = {0xE8, 0xA6, 0xD5, 0xFF, 0xFF};
+static const uint32_t FN_BTL_FINISHED = 0x005BB9B0;
+static const uint32_t SCREEN_TITLE = 4;
 
 static State st = B_IDLE;
 static MatchSettings s{};
@@ -43,7 +48,7 @@ static uint32_t bootedMatch = 0, stateFrames = 0, loadingFrames = 0;
 static bool optSaved = false;
 static uint32_t optRounds = 0, optTimer = 0;
 static int assistFixes = 0;
-static bool hooked = false;
+static bool hooked = false, hookedAfter = false;
 
 static inline uint32_t& U32(uint32_t a) { return *reinterpret_cast<uint32_t*>(a); }
 static void SetState(State n) {
@@ -103,7 +108,34 @@ static void __attribute__((thiscall)) H_NextScreen(void* self, void* blk, int* n
     }
 }
 
+// Build 63: replaces game main's call of 0x5BB9B0 (thiscall, 3 stack args: block,
+// next screen id, a flag byte). After one of our matches, the next screen is the main
+// menu instead of character select / the winner screen, and the lobby moves on to
+// "match over" so our overlay shows Rematch / Back to lobby there.
+typedef void(__attribute__((thiscall)) * BtlFinishedFn)(void*, void*, int*, void*);
+static void __attribute__((thiscall)) H_BtlFinished(void* self, void* blk, int* next, void* flag) {
+    reinterpret_cast<BtlFinishedFn>(FN_BTL_FINISHED)(self, blk, next, flag);
+    if (st != B_FIGHT || !next) return;
+    Log("boot: the fight screen finished; the game chose screen %d (setup +0: P1 %u, P2 %u); going to the main menu instead",
+        *next, U32(SETUP), U32(SETUP + SETUP_STRIDE));
+    *next = (int)SCREEN_TITLE;
+    EnterCriticalSection(&g_lobbyLock);
+    LbSide& me = LB.me;
+    if (NetOn() && me.phase == LP_MATCH && me.matchNo == bootedMatch) {
+        me.phase = LP_POST;
+        me.choice = LCH_NONE;
+        me.choiceMatch = 0;
+        LbChanged();
+        LbNote("match %u is over", me.matchNo);
+    }
+    LeaveCriticalSection(&g_lobbyLock);
+    SetState(B_AFTER);
+}
+
 static bool Install() {
+    if (util::BytesMatch(CALL_BTL_FINISHED, EXPECT_CALL_BTL_FINISHED, sizeof EXPECT_CALL_BTL_FINISHED))
+        hookedAfter = util::WriteRel32(CALL_BTL_FINISHED, 0xE8, (void*)H_BtlFinished);
+    Log("boot: after-fight hook %s", hookedAfter ? "installed" : "NOT installed (unexpected bytes); the game's own after-match screens will run");
     if (!util::BytesMatch(CALL_NEXT_SCREEN, EXPECT_CALL_NEXT_SCREEN, sizeof EXPECT_CALL_NEXT_SCREEN)) {
         Log("boot: unexpected bytes at 0x%08X, starting fights from the overlay is OFF", CALL_NEXT_SCREEN);
         return false;
@@ -187,7 +219,19 @@ static void Tick() {
         break;
     case B_FIGHT:
         if (vt != SCENE_BTL && vt) {
-            Log("boot: the fight screen ended (now %s); the game's own after-match flow runs (build 62 replaces it)", addr::SceneName(vt));
+            Log("boot: the fight screen ended (now %s) without our after-fight hook; the game's own after-match flow runs", addr::SceneName(vt));
+            SetState(B_IDLE);
+        }
+        break;
+    case B_AFTER:
+        if (vt == VT_TITLE) {
+            if (!U.visible.load()) { U.visible = true; }
+            if (NetOn()) U.screen = US_SESSION;
+            U.autoOpened = true;
+            Log("boot: back on the main menu; overlay open with the after-match choices");
+            SetState(B_IDLE);
+        } else if (stateFrames > 60 * 30) {
+            Log("boot: not back on the main menu after 30 s (on %s)", addr::SceneName(vt));
             SetState(B_IDLE);
         }
         break;

@@ -159,7 +159,9 @@ static void UiTitleWatch(uint32_t vt, uint32_t ptr) {
 // Every frame on the game thread (from PollHotkeys), also when the window is in the background.
 static uint32_t g_presents = 0;
 static volatile int g_drawLog = 0;   // build 62: log the next pictures after F1 opens the overlay
+static void UiHookWatch();
 static void UiGameThreadTick(bool focused) {
+    UiHookWatch();
     uint32_t vt, ptr;
     CurScreen(&vt, &ptr);
     U.screenVt = vt;
@@ -303,6 +305,9 @@ static Present_t o_Present = nullptr;
 static Reset_t o_Reset = nullptr;
 static IDirect3DDevice9* g_dev = nullptr;
 static bool g_imgui = false, g_imguiFailed = false;
+static volatile bool g_resetImgui = false;   // build 63: the game moved to a new device
+static int g_presentDepth = 0;              // build 63: re-entry guard (another hook calling ours)
+static Present_t g_firstPresent = nullptr;  // the device's own Present
 static HWND g_uiHwnd = nullptr;
 static WNDPROC g_origWndProc = nullptr;
 static float g_uiScale = 1.0f;
@@ -314,8 +319,8 @@ static DWORD g_presentTid = 0;
 // Build 59 (test 58: the pointer vanished after closing and opening a few times):
 // - checked on every window message, not only once, since the game hides it again;
 // - an empty pointer (the game's "no pointer" shape) is replaced by the arrow;
-// - the pointer is kept inside the game window while the overlay is open (and put in
-//   the middle if it was outside), so it can't wander off to another screen unseen;
+// - (build 63: the pointer is no longer locked inside the game window; the user plays
+//   windowed and wants it free. Only a clip left over from build 59-62 is undone.)
 // - the overlay's own pointer is only drawn while the Windows one is really hidden.
 static int g_cursorBumps = 0;
 static bool g_clipped = false;
@@ -329,22 +334,6 @@ static void UiCursorOnWindowThread(HWND h, bool cap) {
             if (!(ci.flags & CURSOR_SHOWING))
                 for (int i = 0; i < 20 && g_cursorBumps < 40; i++) { g_cursorBumps++; if (ShowCursor(TRUE) >= 0) break; }
             if (!ci.hCursor && !g_softCursor.load()) SetCursor(LoadCursor(nullptr, IDC_ARROW));
-        }
-        if (!g_clipped) {
-            RECT rc;
-            GetClientRect(h, &rc);
-            POINT tl{rc.left, rc.top}, br{rc.right, rc.bottom};
-            ClientToScreen(h, &tl);
-            ClientToScreen(h, &br);
-            RECT scr{tl.x, tl.y, br.x, br.y};
-            if (scr.right - scr.left > 16 && scr.bottom - scr.top > 16) {
-                GetClipCursor(&g_oldClip);
-                POINT p;
-                if (GetCursorPos(&p) && (p.x < scr.left || p.x >= scr.right || p.y < scr.top || p.y >= scr.bottom))
-                    SetCursorPos((scr.left + scr.right) / 2, (scr.top + scr.bottom) / 2);
-                ClipCursor(&scr);
-                g_clipped = true;
-            }
         }
     } else {
         while (g_cursorBumps > 0) { ShowCursor(FALSE); g_cursorBumps--; }
@@ -730,18 +719,18 @@ static void UiMatchPhase(LbSide& me, bool host) {
 static void UiPostPhase(LbSide& me, const LbSide& them) {
     UiHeading("Match over");
     ImGui::Spacing();
-    struct { uint8_t c; const char* label; } opts[] = {{LCH_REMATCH, "Rematch"}, {LCH_SETUP, "Back to match setup"}, {LCH_LOBBY, "Back to lobby"}};
+    struct { uint8_t c; const char* label; } opts[] = {{LCH_REMATCH, "Rematch"}, {LCH_LOBBY, "Back to lobby"}};
     for (auto& o : opts) {
         bool sel = me.choice == o.c && me.choiceMatch == me.matchNo;
         if (UiBigButton(o.label, sel)) { me.choice = o.c; me.choiceMatch = me.matchNo; LbChanged(); }
         ImGui::SameLine();
     }
-    if (UiBigButton("Leave")) LB.leaveNow = true;
+    ImGui::NewLine();
     ImGui::Spacing();
     bool theirs = them.choice != LCH_NONE && them.choiceMatch == me.matchNo;
     ImGui::Text("You: %s", me.choice != LCH_NONE && me.choiceMatch == me.matchNo ? LB_CHOICE_NAME[me.choice] : "choose one");
     ImGui::Text("%s: %s", them.name, theirs ? LB_CHOICE_NAME[them.choice] : "choosing...");
-    UiNote("It happens when you both choose the same. Leave always works straight away.");
+    UiNote("It happens when you both choose the same. Rematch starts the same fight again with the same settings.");
 }
 
 static void UiSessionScreen() {
@@ -933,7 +922,22 @@ static void UiFrame(IDirect3DDevice9* dev) {
     ImGui::EndFrame();
 }
 
+static HRESULT WINAPI H_PresentInner(IDirect3DDevice9* dev, const RECT* a, const RECT* b, HWND c, const RGNDATA* d);
 static HRESULT WINAPI H_Present(IDirect3DDevice9* dev, const RECT* a, const RECT* b, HWND c, const RGNDATA* d) {
+    if (g_presentDepth > 0 && g_firstPresent) return g_firstPresent(dev, a, b, c, d);   // called again through another hook
+    g_presentDepth++;
+    HRESULT r = H_PresentInner(dev, a, b, c, d);
+    g_presentDepth--;
+    return r;
+}
+static HRESULT WINAPI H_PresentInner(IDirect3DDevice9* dev, const RECT* a, const RECT* b, HWND c, const RGNDATA* d) {
+    if (g_resetImgui && dev == g_dev && g_imgui) {
+        g_resetImgui = false;
+        ImGui_ImplDX9_Shutdown();
+        bool ok = ImGui_ImplDX9_Init(dev);
+        Log("ui: overlay moved to the new device (%s)", ok ? "ok" : "FAILED");
+        if (!ok) g_imguiFailed = true;
+    }
     if (dev == g_dev && !g_imguiFailed) {
         if (g_presents++ == 0) { g_presentTid = GetCurrentThreadId(); Log("ui: first picture presented (thread %lu)", g_presentTid); }
         if (!g_imgui) {
@@ -1011,6 +1015,7 @@ static DWORD WINAPI UiHookThread(LPVOID) {
             g_dev = dev;
             o_Reset = (Reset_t)vt[16];
             o_Present = (Present_t)vt[17];
+            g_firstPresent = o_Present;
             vt[16] = (void*)H_Reset;
             vt[17] = (void*)H_Present;
             VirtualProtect(&vt[16], 2 * sizeof(void*), old, &old);
@@ -1024,6 +1029,56 @@ static DWORD WINAPI UiHookThread(LPVOID) {
     }
     Log("ui: the game's renderer never appeared; no overlay");
     return 0;
+}
+
+// Build 63 (test 61/62): during the fight the game stopped presenting through our
+// hook, so the overlay was invisible afterwards. Every game frame: if no picture went
+// through the hook for half a second, say what the device table holds now and put
+// our two functions back (chaining to whatever is there now).
+static void UiHookWatch() {
+    static uint32_t lastPresents = 0, still = 0;
+    static int logs = 0;
+    if (!o_Present || g_imguiFailed) return;
+    if (g_presents != lastPresents) { lastPresents = g_presents; still = 0; return; }
+    if (++still != 30) return;
+    uint32_t r = *reinterpret_cast<volatile uint32_t*>(G_RENDERER);
+    IDirect3DDevice9* dev = r ? *reinterpret_cast<IDirect3DDevice9* volatile*>(r + 0x214) : nullptr;
+    if (!dev) { if (logs < 20) { logs++; Log("ui: hook watch: no pictures for half a second, and no device right now"); } return; }
+    void** vt = *reinterpret_cast<void***>(dev);
+    auto modName = [](void* a, char* out, size_t n) {
+        HMODULE m = nullptr;
+        out[0] = 0;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)a, &m) && m) {
+            char path[MAX_PATH];
+            if (GetModuleFileNameA(m, path, MAX_PATH)) { const char* b = strrchr(path, '\\'); snprintf(out, n, "%s", b ? b + 1 : path); }
+        }
+        if (!out[0]) snprintf(out, n, "no module");
+    };
+    char mp[64], mr[64], mt[64];
+    modName(vt[17], mp, sizeof mp);
+    modName(vt[16], mr, sizeof mr);
+    modName(vt, mt, sizeof mt);
+    if (logs < 20) {
+        logs++;
+        Log("ui: hook watch: no pictures through our hook for half a second (%u so far). Device %p (ours %p), table %p (%s), Present %p (%s, ours %p), Reset %p (%s)",
+            g_presents, (void*)dev, (void*)g_dev, (void*)vt, mt, vt[17], mp, (void*)H_Present, vt[16], mr);
+    }
+    if (dev != g_dev) {
+        // a new device: ImGui's textures belong to the old one, so start ImGui over on the new one
+        if (logs < 20) { logs++; Log("ui: hook watch: the game uses a new device; the overlay moves to it"); }
+        g_resetImgui = true;
+        g_dev = dev;
+    }
+    DWORD old;
+    if (vt[17] != (void*)H_Present || vt[16] != (void*)H_Reset) {
+        if (VirtualProtect(&vt[16], 2 * sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) {
+            if (vt[16] != (void*)H_Reset) { o_Reset = (Reset_t)vt[16]; vt[16] = (void*)H_Reset; }
+            if (vt[17] != (void*)H_Present) { o_Present = (Present_t)vt[17]; vt[17] = (void*)H_Present; }
+            VirtualProtect(&vt[16], 2 * sizeof(void*), old, &old);
+            FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+            if (logs < 20) { logs++; Log("ui: hook watch: our hook put back in the device table"); }
+        } else if (logs < 20) { logs++; Log("ui: hook watch: could not put the hook back (error %lu)", GetLastError()); }
+    }
 }
 static void UiStart() {
     InitializeCriticalSection(&g_lobbyLock);
