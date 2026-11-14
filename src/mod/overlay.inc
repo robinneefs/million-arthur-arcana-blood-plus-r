@@ -650,7 +650,7 @@ static void UiSideColumn(int side, LbSide& s, bool mine, bool present) {
 
 static void UiSetupPhase(LbSide& me, LbSide& them, bool host) {
     UiHeading("Match setup");
-    UiNote("Build 61: the game's own numbers, names come later. If the two stage wishes differ, one of them is picked at random.");
+    UiNote("The game's own numbers for now; names come later. If the two stage wishes differ, one of them is picked at random.");
     ImGui::Spacing();
     if (ImGui::BeginTable("sides", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableNextColumn();
@@ -713,7 +713,7 @@ static void UiMatchPhase(LbSide& me, bool host) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    if (UiBigButton("Test: pretend the match ended")) { me.phase = LP_POST; me.choice = LCH_NONE; me.choiceMatch = 0; LbChanged(); LbNote("match %u ended (test button)", me.matchNo); }
+    if (UiBigButton("Stuck? End this match")) { me.phase = LP_POST; me.choice = LCH_NONE; me.choiceMatch = 0; LbChanged(); LbNote("match %u ended by hand", me.matchNo); }
 }
 
 static void UiPostPhase(LbSide& me, const LbSide& them) {
