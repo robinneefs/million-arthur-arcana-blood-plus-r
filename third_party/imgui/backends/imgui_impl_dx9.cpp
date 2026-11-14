@@ -87,6 +87,35 @@ static void ImGui_ImplDX9_SetupRenderState(ImDrawData* draw_data)
     g_pd3dDevice->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
     g_pd3dDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
     g_pd3dDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    // arcana rollback mod (build 62): states the game's fight can leave behind and the
+    // stock backend doesn't set (the overlay stayed invisible after a fight in test 61)
+    g_pd3dDevice->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
+    g_pd3dDevice->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_CLIPPING, TRUE);
+    g_pd3dDevice->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+    g_pd3dDevice->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+    g_pd3dDevice->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_RANGEFOGENABLE, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_MULTISAMPLEANTIALIAS, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_MULTISAMPLEMASK, 0xFFFFFFFF);
+    g_pd3dDevice->SetRenderState(D3DRS_DEPTHBIAS, 0);
+    g_pd3dDevice->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, 0);
+    g_pd3dDevice->SetRenderState(D3DRS_VERTEXBLEND, D3DVBF_DISABLE);
+    g_pd3dDevice->SetRenderState(D3DRS_INDEXEDVERTEXBLENDENABLE, FALSE);
+    g_pd3dDevice->SetRenderState(D3DRS_TEXTUREFACTOR, 0xFFFFFFFF);
+    g_pd3dDevice->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+    g_pd3dDevice->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+    g_pd3dDevice->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    g_pd3dDevice->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+    g_pd3dDevice->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    g_pd3dDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    g_pd3dDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    g_pd3dDevice->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+    g_pd3dDevice->SetStreamSourceFreq(0, 1);
+    for (DWORD t = 1; t < 8; t++) g_pd3dDevice->SetTexture(t, NULL);
 
     // Setup orthographic projection matrix
     // Our visible imgui space lies from draw_data->DisplayPos (top left) to draw_data->DisplayPos+data_data->DisplaySize (bottom right). DisplayPos is (0,0) for single viewport apps.

@@ -157,6 +157,8 @@ static void UiTitleWatch(uint32_t vt, uint32_t ptr) {
     }
 }
 // Every frame on the game thread (from PollHotkeys), also when the window is in the background.
+static uint32_t g_presents = 0;
+static volatile int g_drawLog = 0;   // build 62: log the next pictures after F1 opens the overlay
 static void UiGameThreadTick(bool focused) {
     uint32_t vt, ptr;
     CurScreen(&vt, &ptr);
@@ -173,7 +175,8 @@ static void UiGameThreadTick(bool focused) {
         bool v = !U.visible.load();
         U.visible = v;
         if (!v) U.drain = true;
-        Log("ui: overlay %s", v ? "shown" : "hidden");
+        Log("ui: overlay %s (pictures so far %u)", v ? "shown" : "hidden", g_presents);
+        if (v) g_drawLog = 3;
     }
     // Opens by itself the first time the main menu is up (build 58, test 57: not on the
     // "press start" picture). The title picture and the main menu are one screen
@@ -303,7 +306,6 @@ static bool g_imgui = false, g_imguiFailed = false;
 static HWND g_uiHwnd = nullptr;
 static WNDPROC g_origWndProc = nullptr;
 static float g_uiScale = 1.0f;
-static uint32_t g_presents = 0;
 static DWORD g_presentTid = 0;
 
 // Build 58 (test 57: no mouse pointer): the game hides the Windows pointer. While the
@@ -938,23 +940,51 @@ static HRESULT WINAPI H_Present(IDirect3DDevice9* dev, const RECT* a, const RECT
             g_imgui = UiInit(dev);
             if (!g_imgui && *reinterpret_cast<HWND*>(addr::G_HWND)) g_imguiFailed = true;
         }
-        if (g_imgui && dev->TestCooperativeLevel() == D3D_OK) {
+        HRESULT coop = g_imgui ? dev->TestCooperativeLevel() : E_FAIL;
+        if (g_imgui && coop != D3D_OK && g_drawLog > 0) { g_drawLog--; Log("ui: draw check: device not ready (%08lX), nothing drawn", (unsigned long)coop); }
+        if (g_imgui && coop == D3D_OK) {
             UiFrame(dev);
             ImGui::Render();
             ImDrawData* dd = ImGui::GetDrawData();
+            if (g_drawLog > 0) {
+                g_drawLog--;
+                IDirect3DSurface9* rt = nullptr;
+                D3DSURFACE_DESC rd{};
+                if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &rt)) && rt) { rt->GetDesc(&rd); rt->Release(); }
+                DWORD cw = 0, st = 0, sc = 0;
+                dev->GetRenderState(D3DRS_COLORWRITEENABLE, &cw);
+                dev->GetRenderState(D3DRS_STENCILENABLE, &st);
+                dev->GetRenderState(D3DRS_SCISSORTESTENABLE, &sc);
+                Log("ui: draw check: picture %u, %d draw lists, %d vertices, display %.0fx%.0f, back buffer %ux%u, game states before ours: colour write %lX, stencil %lu, scissor %lu",
+                    g_presents, dd ? dd->CmdListsCount : -1, dd ? dd->TotalVtxCount : -1, dd ? dd->DisplaySize.x : 0.f, dd ? dd->DisplaySize.y : 0.f,
+                    rd.Width, rd.Height, cw, st, sc);
+            }
+            if (g_drawLog > 0) {
+                IDirect3DSurface9* ds = nullptr;
+                D3DSURFACE_DESC dsd{};
+                if (SUCCEEDED(dev->GetDepthStencilSurface(&ds)) && ds) { ds->GetDesc(&dsd); ds->Release(); }
+                Log("ui: draw check: game depth surface %ux%u", dsd.Width, dsd.Height);
+            }
             if (dd && dd->CmdListsCount > 0) {
                 IDirect3DSurface9 *oldRt = nullptr, *bb = nullptr;
                 dev->GetRenderTarget(0, &oldRt);
                 if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) dev->SetRenderTarget(0, bb);
+                // build 62: no depth surface while we draw (a smaller one left set by the
+                // game makes drawing to the full-size back buffer fail)
+                IDirect3DSurface9* oldDs = nullptr;
+                dev->GetDepthStencilSurface(&oldDs);
+                if (oldDs) dev->SetDepthStencilSurface(nullptr);
                 if (SUCCEEDED(dev->BeginScene())) {
                     ImGui_ImplDX9_RenderDrawData(dd);
                     dev->EndScene();
                 }
+                if (oldDs) { dev->SetDepthStencilSurface(oldDs); oldDs->Release(); }
                 if (oldRt) { dev->SetRenderTarget(0, oldRt); oldRt->Release(); }
                 if (bb) bb->Release();
             }
         }
     }
+    else if (g_drawLog > 0) { g_drawLog--; Log("ui: draw check: picture presented by another device (%p, ours %p) or the overlay is off (%d)", (void*)dev, (void*)g_dev, (int)g_imguiFailed); }
     return o_Present(dev, a, b, c, d);
 }
 static HRESULT WINAPI H_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
