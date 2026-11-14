@@ -132,7 +132,46 @@ static void __attribute__((thiscall)) H_BtlFinished(void* self, void* blk, int* 
     SetState(B_AFTER);
 }
 
+// Build 64: the fight's own "Request rematch? YES / NO" box (fight phase 7, handled in
+// 0x440D30 around 0x441F5A) asks two game functions, per player, whether the box was
+// answered (0x596860) and what the answer was (0x596890; both 1 = rematch). During one
+// of our matches those six calls say "answered: NO" straight away, so the fight ends
+// as if a player said no and our after-fight hook takes over. Same answer on both PCs
+// and in every rollback replay (it only depends on our match running).
+static const uint32_t FN_DLG_DONE = 0x00596860, FN_DLG_ANSWER = 0x00596890;
+static const uint32_t CALLS_DLG_DONE[] = {0x00441F8B, 0x00441F9D, 0x00442044};
+static const uint32_t CALLS_DLG_ANSWER[] = {0x00441FAF, 0x00441FBE, 0x00442052};
+static const uint32_t FIGHT_PHASE = 0x04B79340, FIGHT_STATE = 0x04B79490;
+static bool skipBox = false;
+static int boxSkips = 0;
+static int __cdecl H_DlgDone(int p) {
+    if (skipBox && st == B_FIGHT) { boxSkips++; return 1; }
+    return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_DONE)(p);
+}
+static int __cdecl H_DlgAnswer(int p) {
+    if (skipBox && st == B_FIGHT) return 0;
+    return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_ANSWER)(p);
+}
+static void InstallBoxSkip() {
+    int ok = 0;
+    for (uint32_t a : CALLS_DLG_DONE) {
+        uint8_t e[5] = {0xE8};
+        int32_t rel = (int32_t)(FN_DLG_DONE - (a + 5));
+        memcpy(e + 1, &rel, 4);
+        if (util::BytesMatch(a, e, 5) && util::WriteRel32(a, 0xE8, (void*)H_DlgDone)) ok++;
+    }
+    for (uint32_t a : CALLS_DLG_ANSWER) {
+        uint8_t e[5] = {0xE8};
+        int32_t rel = (int32_t)(FN_DLG_ANSWER - (a + 5));
+        memcpy(e + 1, &rel, 4);
+        if (util::BytesMatch(a, e, 5) && util::WriteRel32(a, 0xE8, (void*)H_DlgAnswer)) ok++;
+    }
+    skipBox = ok == 6;
+    Log("boot: end-of-fight rematch box skip %s (%d of 6 calls)", skipBox ? "installed" : "OFF, unexpected bytes", ok);
+}
+
 static bool Install() {
+    InstallBoxSkip();
     if (util::BytesMatch(CALL_BTL_FINISHED, EXPECT_CALL_BTL_FINISHED, sizeof EXPECT_CALL_BTL_FINISHED))
         hookedAfter = util::WriteRel32(CALL_BTL_FINISHED, 0xE8, (void*)H_BtlFinished);
     Log("boot: after-fight hook %s", hookedAfter ? "installed" : "NOT installed (unexpected bytes); the game's own after-match screens will run");
@@ -218,6 +257,16 @@ static void Tick() {
         if (stateFrames > 60 * 60) { Log("boot: still not in the fight after 60 s (on %s)", addr::SceneName(vt)); SetState(B_IDLE); }
         break;
     case B_FIGHT:
+        {   // fight phase changes, to check the box skip (build 64)
+            static uint32_t lastPhase = 0xFFFFFFFF, lastState = 0xFFFFFFFF;
+            if (stateFrames == 1) { lastPhase = lastState = 0xFFFFFFFF; boxSkips = 0; }
+            uint32_t ph = U32(FIGHT_PHASE), fs = U32(FIGHT_STATE);
+            if (ph != lastPhase || fs != lastState) {
+                Log("boot: fight frame %u: phase %d, state %d (box answers given: %d)", stateFrames, (int)ph, (int)fs, boxSkips);
+                lastPhase = ph;
+                lastState = fs;
+            }
+        }
         if (vt != SCENE_BTL && vt) {
             Log("boot: the fight screen ended (now %s) without our after-fight hook; the game's own after-match flow runs", addr::SceneName(vt));
             SetState(B_IDLE);
