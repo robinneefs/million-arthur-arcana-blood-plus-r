@@ -1,4 +1,4 @@
-// Arcana Blood rollback mod - step 3 prototype (test build 66: own overlay for lobby and match setup).
+// Arcana Blood rollback mod - step 4 prototype (test build 71: real names in our overlay).
 //
 // What this DLL does once the launcher has loaded it into the game:
 //   1. Waits until Steam's DRM layer has decrypted the game code.
@@ -2632,7 +2632,7 @@ static std::atomic<bool> g_hArm{false};
 static std::atomic<int> g_hArming{0};
 static std::atomic<uint32_t> g_hFaults{0};
 static std::atomic_flag g_hSpin = ATOMIC_FLAG_INIT;
-static uint32_t g_hAdded = 0, g_hAddedBlocks = 0, g_hShared = 0, g_hAddLogs = 0;
+static uint32_t g_hAdded = 0, g_hAddedBlocks = 0, g_hShared = 0, g_hAddLogs = 0, g_hBlockLogs = 0;
 static uint64_t g_hWatchHeap = 0;
 static bool g_hHandler = false;
 static const uint32_t kHuntBusy = 60;         // writes outside the game logic before we stop watching a page
@@ -2645,7 +2645,12 @@ static std::atomic<uint32_t> g_hPreLost{0};
 static uint32_t g_hPreLostTotal = 0;
 // Heap blocks added in earlier fights: blocks of the same size join the state
 // from the start in later fights (sizes, at most 64).
+// Build 68: not for big blocks. Test 67 crashed (out of memory) because a
+// 16.5 MB block size from the boss fight made six such blocks (100 MB) join
+// every later fight, times every saved frame. Big blocks still join a fight
+// when the game logic writes them in that fight.
 static std::vector<uint32_t> g_heapKeptSizes;
+static const uint32_t kKeepSizeMax = 4u << 20;
 static inline void HLock() { while (g_hSpin.test_and_set(std::memory_order_acquire)) {} }
 static inline void HUnlock() { g_hSpin.clear(std::memory_order_release); }
 
@@ -2762,7 +2767,7 @@ static void HuntArmAll(HSet* h) {
 }
 static void HuntStart() {
     g_hFaults = 0;
-    g_hAdded = g_hAddedBlocks = g_hShared = g_hAddLogs = 0;
+    g_hAdded = g_hAddedBlocks = g_hShared = g_hAddLogs = g_hBlockLogs = 0;
     g_hPreN = 0;
     g_hPreLost = 0;
     g_hPreLostTotal = 0;
@@ -2894,6 +2899,18 @@ static bool HuntCollect() {
         }
         if (!alive) continue;
         const Block& B = g_blocks[b];
+        // Build 68: memory guard. Every saved frame holds its own copy of the
+        // state; past ~700 MB in total (vectors can briefly need double) the 32-bit game runs out of address
+        // space (test 67 crashed that way). Leave the block out and say so:
+        // a desync is better than a crash.
+        if ((uint64_t)(g_stateBytes + B.size) * (g_ring.size() + 2) > (700ull << 20)) {
+            for (size_t q = first; q <= last; q++) if (h->status[q] != 2) h->status[q] = 3;
+            DescribeAddr(h->firstEip[i], who, sizeof who);
+            Log("  memory watch: heap block 0x%08X (%u bytes, first written by %s at frame %u) LEFT OUT: the state would get too big for memory (%.1f MB now, %u saved frames)",
+                B.start, B.size, who, h->firstFrame[i], g_stateBytes / 1048576.0, (unsigned)g_ring.size());
+            i = last;
+            continue;
+        }
         uint32_t c0 = g_blockFirst[b];
         uint32_t leftOut = 0;
         for (uint32_t ci = c0; ci < g_chunks.size() && g_chunks[ci].block == b; ci++) {
@@ -2913,10 +2930,10 @@ static bool HuntCollect() {
         g_stateBlocks.push_back((uint32_t)b);
         g_hAddedBlocks++;
         addedNow++;
-        if (std::find(g_heapKeptSizes.begin(), g_heapKeptSizes.end(), B.size) == g_heapKeptSizes.end() && g_heapKeptSizes.size() < 64)
+        if (B.size <= kKeepSizeMax && std::find(g_heapKeptSizes.begin(), g_heapKeptSizes.end(), B.size) == g_heapKeptSizes.end() && g_heapKeptSizes.size() < 64)
             g_heapKeptSizes.push_back(B.size);
-        if (g_hAddLogs < 60) {
-            g_hAddLogs++;
+        if (g_hBlockLogs < 60) {
+            g_hBlockLogs++;
             DescribeAddr(h->firstEip[i], who, sizeof who);
             Log("  memory watch: added heap block 0x%08X (%u bytes; first written by %s at frame %u)%s", B.start, B.size, who, h->firstFrame[i],
                 leftOut ? " - parts another thread writes are left out" : "");
@@ -3396,7 +3413,7 @@ static void BuildFixedState() {
             if (useBlock[b]) continue;
             uint32_t n = g_blocks[b].size;
             bool k = std::find(std::begin(addr::FIGHT_BLOCK_SIZES), std::end(addr::FIGHT_BLOCK_SIZES), n) != std::end(addr::FIGHT_BLOCK_SIZES) ||
-                     std::find(g_heapKeptSizes.begin(), g_heapKeptSizes.end(), n) != g_heapKeptSizes.end();
+                     (n <= kKeepSizeMax && std::find(g_heapKeptSizes.begin(), g_heapKeptSizes.end(), n) != g_heapKeptSizes.end());
             if (!k || !g_own.Has(g_blocks[b].start)) continue;
             useBlock[b] = 1;
             known++;
@@ -4663,7 +4680,7 @@ static bool Install() {
 }
 
 static DWORD WINAPI StartThread(LPVOID) {
-    Log("Arcana Blood rollback mod, step 3 prototype, test build 66. Game pid %lu", GetCurrentProcessId());
+    Log("Arcana Blood rollback mod, test build %u. Game pid %lu", NET_BUILD, GetCurrentProcessId());
     LoadSettings();
     Log("settings: profile_frames=%d depth=%d include_contested=%d heap=%d heap_restore=%d", g_cfg.profileFrames, g_cfg.depth,
         g_cfg.includeContested, g_cfg.heap, g_cfg.heapRestore);

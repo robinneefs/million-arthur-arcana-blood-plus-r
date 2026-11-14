@@ -33,6 +33,12 @@ static const uint32_t VT_TITLE = 0x008D2CBC, VT_LOADING = 0x008D2604;
 static const uint32_t SETUP = 0x04DC9658, SETUP_STRIDE = 0x200;
 static const uint32_t FIGHT_ASSISTS = 0x04B79560;  // fight setup copy, 3 per player (stride 0xC)
 static const uint32_t OPT_ROUNDS = 0x04DCAD04, OPT_TIMER = 0x04DCAD08;
+// Build 68: the game copies its options into a settings block (0x5D0F80, run
+// when the options load or change): +0x08 timer (seconds, from the table at
+// 0x7027E0), +0x14/+0x18/+0x1C rounds to win (option + 1). Test 67 set only
+// the options, so the timer happened to work but the fight kept 2 rounds.
+static const uint32_t GAME_SETTINGS = 0x051AFDC0, TIMER_TABLE = 0x007027E0;
+static uint32_t setOld[4];
 static const uint32_t CALL_NEXT_SCREEN = 0x005BE29D;  // game main -> 0x5BB170 (which screen after a side change)
 static const uint8_t EXPECT_CALL_NEXT_SCREEN[] = {0xE8, 0xCE, 0xCE, 0xFF, 0xFF};
 static const uint32_t FN_NEXT_SCREEN = 0x005BB170;
@@ -47,6 +53,7 @@ static MatchSettings s{};
 static uint32_t bootedMatch = 0, stateFrames = 0, loadingFrames = 0;
 static bool optSaved = false;
 static uint32_t optRounds = 0, optTimer = 0;
+static bool setSaved = false;
 static int assistFixes = 0;
 static bool hooked = false, hookedAfter = false;
 
@@ -223,6 +230,14 @@ static void Tick() {
             if (!optSaved) { optRounds = U32(OPT_ROUNDS); optTimer = U32(OPT_TIMER); optSaved = true; }
             U32(OPT_ROUNDS) = s.rounds >= 1 ? s.rounds - 1u : 0u;
             U32(OPT_TIMER) = s.timer;
+            if (!setSaved) {
+                setOld[0] = U32(GAME_SETTINGS + 0x08); setOld[1] = U32(GAME_SETTINGS + 0x14);
+                setOld[2] = U32(GAME_SETTINGS + 0x18); setOld[3] = U32(GAME_SETTINGS + 0x1C);
+                setSaved = true;
+            }
+            U32(GAME_SETTINGS + 0x08) = U32(TIMER_TABLE + 4 * (s.timer < 4 ? s.timer : 2));
+            U32(GAME_SETTINGS + 0x14) = U32(GAME_SETTINGS + 0x18) = U32(GAME_SETTINGS + 0x1C) = U32(OPT_ROUNDS) + 1u;
+            Log("boot: game settings: timer %u, rounds %u (were %u, %u)", U32(GAME_SETTINGS + 0x08), U32(GAME_SETTINGS + 0x14), setOld[0], setOld[1]);
             U32(0x04DC9650) = 2;         // Versus
             U32(0x04DC9640) = 1;
             U32(0x04DC8A04) = 3;         // both sides human
@@ -317,6 +332,11 @@ static void SessionEnd() {
         U32(OPT_TIMER) = optTimer;
         optSaved = false;
         Log("boot: options rounds/timer put back (%u, %u)", optRounds, optTimer);
+    }
+    if (setSaved) {
+        U32(GAME_SETTINGS + 0x08) = setOld[0]; U32(GAME_SETTINGS + 0x14) = setOld[1];
+        U32(GAME_SETTINGS + 0x18) = setOld[2]; U32(GAME_SETTINGS + 0x1C) = setOld[3];
+        setSaved = false;
     }
     if (st != B_IDLE) SetState(B_IDLE);
     bootedMatch = 0;
