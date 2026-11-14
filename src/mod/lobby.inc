@@ -24,9 +24,36 @@
 // thread in LobbyTick().
 // ===========================================================================
 
-// Build 61: the game's own ID ranges (character files act/chara 00-0D, assist
-// characters act/partner 00-1E, stages bg/stage00-0C). Names come later.
-static const int LB_CHARS = 14, LB_COLORS = 24, LB_ASSISTS = 31, LB_STAGES = 13, LB_TIMERS = 4;
+// Build 67: real names and ranges, from the game's own English text file
+// (flashrom/text/textData_English.tdf: every byte minus 0x32, then UTF-16)
+// and the files in flashrom/act. 13 playable characters (00-0C); 0D is the
+// boss (Arcana Blood Corrupted Iai Arthur). Build 70: left out of the list
+// again because a fight with her crashed during a rollback replay (test 69). 21 colours per character (palette slots
+// 0-20, the game shows them as 01-21; the boss has only 1, test 67). 31 assist characters
+// (act/partner 00-1E). Stages bg/stage00-0C still have no names: the game's
+// Versus stage select offers 8 of these 13.
+static const int LB_CHARS = 13, LB_CHARS_ALL = 14, LB_BOSS = 0x0D, LB_COLORS = 21, LB_BOSS_COLORS = 1,
+                 LB_ASSISTS = 31, LB_STAGES = 9, LB_TIMERS = 4;
+// Build 69/71: the game has 13 stage files (00-0C); 09, 0A, 0B and 0C are
+// copies of stage 00 that draw the characters black (tests 65b, 68, 70), so
+// they are left out. Picks hold a position in this list (Stage 01-10); the match settings
+// hold the game's own stage id.
+static const uint8_t LB_STAGE_IDS[LB_STAGES] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+static inline int LbColorCount(uint8_t chara) { return chara == LB_BOSS ? LB_BOSS_COLORS : LB_COLORS; }
+static const char* const LB_CHAR_NAMES[LB_CHARS_ALL] = {
+    "Twinblade Arthur", "Blade-Protector Arthur", "Thief Arthur", "Zechs Siegfried", "Hybrid Nimue",
+    "Type II Bisclavret", "Void Eternal Flame", "Unique Snow White", "Otherworldly Riesz", "Iai Arthur",
+    "Otherworldly Koume Sakiyama", "Wildcat Arthur", "Otherworldly Iori Yagami",
+    "Corrupted Iai Arthur (boss)"};
+static const char* const LB_ASSIST_NAMES[LB_ASSISTS] = {
+    "Clone Techno-Smith Arthur", "Clone Magic Guild Arthur", "Clone Fay", "Clone Lif\xC3\xA9" "e", "Clone Elle",
+    "Type I Lancelot", "Type I Gawain", "Type I Galahad", "Ruler Supreme Guinevere", "Type I Mordred",
+    "Monarch Constantine", "Type II Peridod", "Clone Mercenary Arthur", "Clone Merchant Arthur", "Clone Diva Arthur",
+    "Clone Scathach", "Clone Uathach", "Clone Aife", "Clone Cuchulainn", "Clone Pharsalia",
+    "Summer Evaine", "Supporter Enide", "Melancholy Princess Kaguya", "Supporter Claire", "Type II Tor",
+    "Type II Balin", "Unique Little Grey", "Foible Elle", "Clone Azia Kriemhild", "Otherworldly Hawkeye",
+    "Otherworldly Akira Ono"};
+static const char* const LB_TIMER_NAMES[LB_TIMERS] = {"30 seconds", "60 seconds", "99 seconds", "No time limit"};
 static const uint8_t LB_RANDOM = 0xFF;          // "Random" in a pick
 enum LbPhase : uint8_t { LP_LOBBY = 0, LP_SETUP = 1, LP_MATCH = 2, LP_POST = 3 };
 enum LbChoice : uint8_t { LCH_NONE = 0, LCH_REMATCH = 1, LCH_SETUP = 2, LCH_LOBBY = 3, LCH_LEAVE = 4 };
@@ -105,26 +132,50 @@ static const char* LbCharName(uint8_t c) {
     static char buf[4][24];
     static int k = 0;
     if (c == LB_RANDOM) return "Random";
+    if (c < LB_CHARS_ALL) return LB_CHAR_NAMES[c];
     k = (k + 1) & 3;
     snprintf(buf[k], sizeof buf[k], "Character %02X", c);
     return buf[k];
 }
+// s = position in LB_STAGE_IDS (a pick)
 static const char* LbStageName(uint8_t s) {
     static char buf[4][24];
     static int k = 0;
     if (s == LB_RANDOM) return "Random";
     k = (k + 1) & 3;
-    snprintf(buf[k], sizeof buf[k], "Stage %02X", s);
+    snprintf(buf[k], sizeof buf[k], "Stage %02u", s + 1u);
     return buf[k];
 }
-
-
+// id = the game's stage id (match settings)
+static const char* LbStageIdName(uint8_t id) {
+    for (int i = 0; i < LB_STAGES; i++) if (LB_STAGE_IDS[i] == id) return LbStageName((uint8_t)i);
+    static char buf[24];
+    snprintf(buf, sizeof buf, "Stage id %02X", id);
+    return buf;
+}
+static const char* LbColorName(uint8_t c) {
+    static char buf[4][16];
+    static int k = 0;
+    k = (k + 1) & 3;
+    snprintf(buf[k], sizeof buf[k], "Colour %02u", c + 1u);
+    return buf[k];
+}
+static const char* LbAssistName(uint8_t a) {
+    static char buf[4][16];
+    static int k = 0;
+    if (a < LB_ASSISTS) return LB_ASSIST_NAMES[a];
+    k = (k + 1) & 3;
+    snprintf(buf[k], sizeof buf[k], "Assist %02X", a);
+    return buf[k];
+}
+static const char* LbTimerName(uint8_t t) { return LB_TIMER_NAMES[t < LB_TIMERS ? t : 2]; }
 
 static void LbNoteStart() {
     const MatchSettings& m = LB.s;
-    LbNote("match %u starts: %s (colour %u, assists %u/%u/%u) vs %s (colour %u, assists %u/%u/%u), %s, rounds %u, timer %u, checksum %08X",
-           m.matchNo, LbCharName(m.chara[0]), m.color[0] + 1u, m.assist[0][0], m.assist[0][1], m.assist[0][2], LbCharName(m.chara[1]),
-           m.color[1] + 1u, m.assist[1][0], m.assist[1][1], m.assist[1][2], LbStageName(m.stage), m.rounds, m.timer, LB.sum);
+    LbNote("match %u starts: %s (id %02X, colour %02u, assists %02X/%02X/%02X) vs %s (id %02X, colour %02u, assists %02X/%02X/%02X), %s (id %02X), rounds %u, %s, checksum %08X",
+           m.matchNo, LbCharName(m.chara[0]), m.chara[0], m.color[0] + 1u, m.assist[0][0], m.assist[0][1], m.assist[0][2],
+           LbCharName(m.chara[1]), m.chara[1], m.color[1] + 1u, m.assist[1][0], m.assist[1][1], m.assist[1][2],
+           LbStageIdName(m.stage), m.stage, m.rounds, LbTimerName(m.timer), LB.sum);
 }
 
 static void LbReset() {
@@ -229,13 +280,13 @@ static void LbMakeSettings() {
     auto rnd = [&](uint32_t n) { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return r % n; };
     const LbPicks* pk[2] = {&LB.me.p, &LB.them.p};   // player 1 is this PC
     for (int i = 0; i < 2; i++) {
-        s.chara[i] = pk[i]->chara == LB_RANDOM ? (uint8_t)rnd(LB_CHARS) : pk[i]->chara;
-        s.color[i] = pk[i]->color;
+        s.chara[i] = pk[i]->chara == LB_RANDOM || pk[i]->chara >= LB_CHARS ? (uint8_t)rnd(LB_CHARS) : pk[i]->chara;
+        s.color[i] = pk[i]->color < LbColorCount(s.chara[i]) ? pk[i]->color : 0;   // never a colour the character doesn't have
         for (int k = 0; k < 3; k++) s.assist[i][k] = pk[i]->assist[k] < LB_ASSISTS ? pk[i]->assist[k] : 0;
     }
     uint8_t a = pk[0]->stage, b = pk[1]->stage;
     uint8_t st = a == b ? a : (rnd(2) ? a : b);       // each picks; the game chooses one of the two
-    s.stage = st == LB_RANDOM ? (uint8_t)rnd(LB_STAGES) : st;
+    s.stage = LB_STAGE_IDS[st == LB_RANDOM || st >= LB_STAGES ? rnd(LB_STAGES) : st];
     s.rounds = LB.me.rounds;
     s.timer = LB.me.timer;
     s.delay = LB.me.delay;
