@@ -39,6 +39,16 @@ static const int LB_CHARS = 13, LB_CHARS_ALL = 14, LB_BOSS = 0x0D, LB_COLORS = 2
 // they are left out. Picks hold a position in this list (Stage 01-10); the match settings
 // hold the game's own stage id.
 static const uint8_t LB_STAGE_IDS[LB_STAGES] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+// Build 72: [ui] show_boss=1 in rollback.ini puts the boss back in the list, for the boss-crash test only.
+static int g_showBoss = -1;
+static inline int LbCharCount() {
+    if (g_showBoss < 0) {
+        wchar_t ini[MAX_PATH];
+        _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
+        g_showBoss = GetPrivateProfileIntW(L"ui", L"show_boss", 0, ini) ? 1 : 0;
+    }
+    return g_showBoss ? LB_CHARS_ALL : LB_CHARS;
+}
 static inline int LbColorCount(uint8_t chara) { return chara == LB_BOSS ? LB_BOSS_COLORS : LB_COLORS; }
 static const char* const LB_CHAR_NAMES[LB_CHARS_ALL] = {
     "Twinblade Arthur", "Blade-Protector Arthur", "Thief Arthur", "Zechs Siegfried", "Hybrid Nimue",
@@ -280,7 +290,7 @@ static void LbMakeSettings() {
     auto rnd = [&](uint32_t n) { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return r % n; };
     const LbPicks* pk[2] = {&LB.me.p, &LB.them.p};   // player 1 is this PC
     for (int i = 0; i < 2; i++) {
-        s.chara[i] = pk[i]->chara == LB_RANDOM || pk[i]->chara >= LB_CHARS ? (uint8_t)rnd(LB_CHARS) : pk[i]->chara;
+        s.chara[i] = pk[i]->chara == LB_RANDOM || pk[i]->chara >= LbCharCount() ? (uint8_t)rnd(LB_CHARS) : pk[i]->chara;
         s.color[i] = pk[i]->color < LbColorCount(s.chara[i]) ? pk[i]->color : 0;   // never a colour the character doesn't have
         for (int k = 0; k < 3; k++) s.assist[i][k] = pk[i]->assist[k] < LB_ASSISTS ? pk[i]->assist[k] : 0;
     }

@@ -21,7 +21,7 @@
 enum : uint8_t { M_HELLO = 1, M_INPUT = 2, M_FP = 3, M_RAW = 4, M_PING = 5, M_PONG = 6, M_BYE = 7, M_SURV = 8, M_SPAGE = 9, M_SAVE = 10, M_SAVEACK = 11,
                  M_LOBBY = 12, M_START = 13, M_STARTACK = 14 };   // build 57: lobby.inc
 static const uint32_t NET_MAGIC = 0x33425241;   // "ARB3"
-static const uint32_t NET_PROTO = 1, NET_BUILD = 71;
+static const uint32_t NET_PROTO = 1, NET_BUILD = 89;
 // Build 57: lobby and match setup (lobby.inc) and the overlay (overlay.inc)
 static void LbHandle(const uint8_t* p, int n);
 static void LobbyTick();
@@ -412,37 +412,75 @@ static void SendHello() {
 // fight is the same, so each PC hides values that look like such a pointer
 // on its own PC. When a block still differs, both PCs send that block in
 // full and compare it with what either PC called a pointer left out.
-static uint8_t g_ptrMap[65536 / 8];          // 64 KB pieces of the address space holding heap / DLL memory
-static uint32_t g_exeLo = 0x00400000, g_exeHi = 0x00400000;
+// 64 KB pieces of the address space holding heap / DLL memory. Build 77: built on a
+// worker thread into the spare buffer, then swapped in (test 76b: walking the
+// address space took 23 ms on the laptop every 600 frames, inside a frame).
+static uint8_t g_ptrMapBuf[2][65536 / 8];
+static std::atomic<uint8_t*> g_ptrMapCur{g_ptrMapBuf[0]};
+static std::atomic<bool> g_ptrMapBusy{false};
+static uint32_t g_exeLo = 0, g_exeHi = 0;
 static uint32_t g_ptrMapAt = 0;
-static void BuildPtrMap() {
-    memset(g_ptrMap, 0, sizeof g_ptrMap);
-    if (g_exeHi == g_exeLo) {
-        auto* dos = (IMAGE_DOS_HEADER*)GetModuleHandleW(nullptr);
-        auto* nth = (IMAGE_NT_HEADERS*)((uint8_t*)dos + dos->e_lfanew);
-        g_exeLo = (uint32_t)dos;
-        g_exeHi = g_exeLo + nth->OptionalHeader.SizeOfImage;
-    }
+static void BuildPtrMapInto(uint8_t* m) {
+    memset(m, 0, 65536 / 8);
     uint64_t a = 0x10000;
     MEMORY_BASIC_INFORMATION mi;
     while (a < 0xFFFF0000ull && VirtualQuery((LPCVOID)(uintptr_t)a, &mi, sizeof mi)) {
         uint64_t lo = (uintptr_t)mi.BaseAddress, hi = lo + mi.RegionSize;
         if (hi <= a) break;
         if (mi.State == MEM_COMMIT && !(lo >= g_exeLo && hi <= g_exeHi))
-            for (uint64_t g = lo >> 16; g <= (hi - 1) >> 16 && g < 65536; g++) g_ptrMap[g >> 3] |= (uint8_t)(1u << (g & 7));
+            for (uint64_t g = lo >> 16; g <= (hi - 1) >> 16 && g < 65536; g++) m[g >> 3] |= (uint8_t)(1u << (g & 7));
         a = hi;
     }
+}
+// One worker thread for the whole run (made the first time, outside a fight frame
+// where possible), woken by an event; no thread is created during fights.
+static HANDLE g_ptrMapEv = nullptr;
+static DWORD WINAPI PtrMapThread(LPVOID) {
+    for (;;) {
+        WaitForSingleObject(g_ptrMapEv, INFINITE);
+        uint8_t* cur = g_ptrMapCur.load();
+        uint8_t* spare = cur == g_ptrMapBuf[0] ? g_ptrMapBuf[1] : g_ptrMapBuf[0];
+        BuildPtrMapInto(spare);
+        g_ptrMapCur.store(spare);
+        g_ptrMapBusy.store(false);
+    }
+    return 0;
+}
+static void BuildPtrMap(bool now = false) {
+    if (g_exeHi == g_exeLo) {
+        auto* dos = (IMAGE_DOS_HEADER*)GetModuleHandleW(nullptr);
+        auto* nth = (IMAGE_NT_HEADERS*)((uint8_t*)dos + dos->e_lfanew);
+        g_exeLo = (uint32_t)dos;
+        g_exeHi = g_exeLo + nth->OptionalHeader.SizeOfImage;
+    }
     g_ptrMapAt = g_tick;
+    if (!g_ptrMapEv) {
+        g_ptrMapEv = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        HANDLE t = g_ptrMapEv ? CreateThread(nullptr, 64 << 10, PtrMapThread, nullptr, 0, nullptr) : nullptr;
+        if (t) CloseHandle(t); else now = true;
+    }
+    if (now || !g_ptrMapEv) {
+        if (g_ptrMapBusy.load()) return;
+        uint8_t* cur = g_ptrMapCur.load();
+        uint8_t* spare = cur == g_ptrMapBuf[0] ? g_ptrMapBuf[1] : g_ptrMapBuf[0];
+        BuildPtrMapInto(spare);
+        g_ptrMapCur.store(spare);
+        return;
+    }
+    bool exp = false;
+    if (!g_ptrMapBusy.compare_exchange_strong(exp, true)) return;
+    SetEvent(g_ptrMapEv);
 }
 static inline bool LooksLikePtr(uint32_t v) {
     if (v < 0x10000) return false;
     if (v >= g_exeLo && v < g_exeHi) return false;      // the game's own image: same address on every PC
     uint32_t g = v >> 16;
-    return (g_ptrMap[g >> 3] >> (g & 7)) & 1;
+    return (g_ptrMapCur.load(std::memory_order_relaxed)[g >> 3] >> (g & 7)) & 1;
 }
 static void NetFpCapture(uint32_t k) {
     if (!NetOn() || !N.synced || N.sceneVt != SCENE_BTL || k % FP_EVERY != 1) return;
-    if (g_tick - g_ptrMapAt > 600) BuildPtrMap();
+    if (g_exeHi == g_exeLo || k == 1) BuildPtrMap(true);   // first time, and fresh for each fight's first check (build 81: 80a false alarm at frame 1)
+    else if (g_tick - g_ptrMapAt > 600) BuildPtrMap();
     FpLocal& L = N.fl[(k / FP_EVERY) % 8];
     L.frame = k;
     L.seed = t_seed;
@@ -486,9 +524,11 @@ static void FpCompare(FpLocal& L) {
     FpRemote& R = N.fr[(L.frame / FP_EVERY) % 8];
     if (!L.final || L.compared || R.frame != L.frame) return;
     L.compared = true;
-    if (L.seed != R.seed) {
+    bool seedBad = L.seed != R.seed;
+    if (seedBad) {
         NetDesync(L.frame, "random number state differs (this PC %08X, other PC %08X)", L.seed, R.seed);
-        return;
+        if (N.desyncs > 3) return;     // build 77: the first times, also compare the memory to see what else differs
+        RandTraceDump("first random-number difference");
     }
     uint32_t bad = 0;
     for (uint32_t b = 0; b < FP_NBLK; b++) {
@@ -496,7 +536,7 @@ static void FpCompare(FpLocal& L) {
         if (bad < 6) SendRaw(L, b);
         bad++;
     }
-    if (!bad) N.fpOk++;
+    if (!bad) { if (!seedBad) N.fpOk++; }
     else if (N.fpFalse + N.desyncs < 30) Log("net: fingerprint of frame %u: %u of %u blocks differ, comparing them in full", L.frame, bad, FP_NBLK);
 }
 static void NetHandleRaw(const NRaw* m, int n) {
@@ -837,6 +877,7 @@ static void NetBecomeOn() {
     Log("net: CONNECTED to %s (computer \"%s\"). You are player %d. Their input delay %u, yours %d. Your controller: slot %u. Seed %08X.",
         who, r.name, N.side + 1, r.delay, g_ncfg.delay, N.localDev, N.seed);
     if (N.localDev >= 8) Log("net: note: you seem to play on the keyboard. Online play needs a controller for now.");
+    BuildPtrMap(true);     // build 77: makes the pointer-map worker thread now, not during a fight
     LbReset();
     UiSessionStarted();
     SsStart();
@@ -1031,6 +1072,7 @@ static void NetUpdateStatus() {
 // the frame skipped, so the window keeps responding.
 template <typename Ready> static bool NetWait(Ready ready, uint32_t maxMs) {
     if (ready()) return true;
+    PerfScope ps(perf::P_WAIT);    // build 72
     uint32_t t0 = GetTickCount(), lastSend = t0;
     for (;;) {
         Sleep(1);
@@ -1355,11 +1397,18 @@ static NetAct NetBeforeInput() {
         N.aheadF += (aheadNowQ * 16 - N.aheadF) / 8;                // smoothing (x16 so nothing is lost to rounding)
         N.aheadQ = N.aheadF / 16;
         N.syncQ = (N.aheadQ - N.rAheadQ) / 2;
-        if (g_ncfg.clockSync && g_frame - N.lastAdjust >= 6 && N.syncQ >= 4) {
+        // Build 73 (test 72a): each wait is a skipped frame (a 33 ms frame you can
+        // see), and it fired 10-18 times per 10 s, mostly on noise. Now: nothing in
+        // loopback (the stand-in runs in step with us by design); a gap under 1.5
+        // frames is left alone; 1.5-2 frames: one wait at most every 30 frames;
+        // 2 frames or more (after a hiccup): a wait every 2 frames until it is back.
+        int gapQ = N.syncQ;
+        uint32_t every = gapQ >= 8 ? 2 : gapQ >= 6 ? 30 : 0xFFFFFFFFu;
+        if (g_ncfg.clockSync && !N.loop && every != 0xFFFFFFFFu && g_frame - N.lastAdjust >= every) {
             N.lastAdjust = g_frame;
             N.timeStalls++;
             N.lastStallFrame = T;
-            Sleep(16);                                              // build 41: wait a frame's time instead of skipping
+            { PerfScope ps(perf::P_WAIT); Sleep(16); }              // build 41: wait a frame's time instead of skipping
             return NetAct::Inject;
         }
     }

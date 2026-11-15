@@ -16,6 +16,14 @@ const wchar_t* ModDir() { return g_modDir; }
 
 void LogOpen(const wchar_t* path) {
     InitializeCriticalSection(&g_logLock);
+    // Build 89: keep the last session's log (a crash log survives a restart).
+    wchar_t prev[MAX_PATH];
+    wcsncpy(prev, path, MAX_PATH - 1); prev[MAX_PATH - 1] = 0;
+    wchar_t* dot = wcsrchr(prev, L'.');
+    if (dot && (size_t)(dot - prev) + 16 < MAX_PATH) {
+        wcscpy(dot, L"_previous.txt");
+        MoveFileExW(path, prev, MOVEFILE_REPLACE_EXISTING);
+    }
     g_log = _wfopen(path, L"w");
 }
 

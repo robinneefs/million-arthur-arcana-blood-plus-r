@@ -630,7 +630,7 @@ static void UiSideColumn(int side, LbSide& s, bool mine, bool present) {
     char id[32];
     ImGui::TextColored(theme::TextDim(), "Character");
     snprintf(id, sizeof id, "##ch%d", side);
-    if (UiPickCombo(id, &s.p.chara, LB_CHARS, true, LbCharName, ed)) {   // build 70: boss left out (crash in a rollback, test 69)
+    if (UiPickCombo(id, &s.p.chara, LbCharCount(), true, LbCharName, ed)) {   // build 70: boss left out (crash in a rollback, test 69)
         if (s.p.color >= LbColorCount(s.p.chara)) s.p.color = 0;
         LbChanged();
     }

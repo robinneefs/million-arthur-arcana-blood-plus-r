@@ -1,4 +1,4 @@
-// Arcana Blood rollback mod - step 4 prototype (test build 71: real names in our overlay).
+// Arcana Blood rollback mod - step 5 prototype (test build 85: CPU write watch report also at a desync and a crash).
 //
 // What this DLL does once the launcher has loaded it into the game:
 //   1. Waits until Steam's DRM layer has decrypted the game code.
@@ -55,6 +55,7 @@
 // Nothing is written into the game folder. All files sit next to this DLL.
 
 #include <windows.h>
+#include <tlhelp32.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -64,6 +65,7 @@
 #include <atomic>
 #include <new>
 #include <unordered_map>
+#include <unordered_set>
 #include "addr.h"
 #include "util.h"
 #include "transport.h"
@@ -112,15 +114,25 @@ struct Settings {
     int dirtyTracking = 1;       // build 35: save/restore only memory that changed
     int useProfile = 0;          // build 49: 0 = fixed list + memory watch (no profile), 1 = old profile (F9 first)
     int watchHeapMB = 1024;      // build 49: most heap memory the watch covers
+    int watchBlockMaxKB = 8192;  // build 73: heap blocks bigger than this are not watched (left out of the state)
     // Build 30: fake-lag rollback test (F7)
     int fakeLag = 4;             // frames until the "other player's" input arrives
     int fakeJitter = 2;          // up to this many frames extra, at random
     int fakeLoss = 5;            // % of inputs that arrive 4 frames later still (a lost packet resent)
     int fakeRemote = 1;          // which player's input is treated as coming over the network (1 or 2)
     int verifyEvery = 4;         // every N frames, rewind 8 frames and check the replay matches (0 = off)
+    int verifyBudgetMs = 8;      // build 88: a check replays only as many frames as fit in this many ms (0 = always the full depth)
     int onlineVerifyEvery = 0;   // build 57: the same check in online fights (test 56: it cost the laptop ~20 ms a time, so off)
+    uint32_t ownSeed[8] = {};    // build 79: game code (wrapper callers) whose random numbers use their own seed
+    int ownSeedN = 0;
+    int resetTimers = 1;         // build 80: reset stage timers at fight start (online)
+    int watchBigMaxKB = 32768;   // build 83: blocks over watch_block_max_kb up to this are watched page by page
+    uint32_t hwWatch[3] = {}; // build 84: addresses for the CPU write watch (ini hw_watch)
+    int bigWatch = 1;            // build 82: watch writes into left-out big blocks
+    int memList = 1;             // build 81: rollback_memlist.txt: use it at fight start, add what the memory watch finds
 };
 static Settings g_cfg;
+static void HwReport(const char* why);   // build 85
 
 static void LoadSettings() {
     wchar_t ini[MAX_PATH];
@@ -140,12 +152,45 @@ static void LoadSettings() {
     g_cfg.watchHeapMB      = GetPrivateProfileIntW(L"rollback", L"watch_heap_mb", 1024, ini);
     if (g_cfg.watchHeapMB < 0) g_cfg.watchHeapMB = 0;
     if (g_cfg.watchHeapMB > 1536) g_cfg.watchHeapMB = 1536;
+    g_cfg.watchBlockMaxKB  = GetPrivateProfileIntW(L"rollback", L"watch_block_max_kb", 8192, ini);
+    if (g_cfg.watchBlockMaxKB < 64 || g_cfg.watchBlockMaxKB > 32768) g_cfg.watchBlockMaxKB = 32768;
     g_cfg.fakeLag          = GetPrivateProfileIntW(L"rollback", L"fake_lag_frames", 4, ini);
     g_cfg.fakeJitter       = GetPrivateProfileIntW(L"rollback", L"fake_jitter_frames", 2, ini);
     g_cfg.fakeLoss         = GetPrivateProfileIntW(L"rollback", L"fake_loss_percent", 5, ini);
     g_cfg.fakeRemote       = GetPrivateProfileIntW(L"rollback", L"fake_remote_player", 1, ini);
     g_cfg.verifyEvery      = GetPrivateProfileIntW(L"rollback", L"verify_every", 4, ini);
     g_cfg.onlineVerifyEvery = GetPrivateProfileIntW(L"rollback", L"online_verify_every", 0, ini);
+    g_cfg.verifyBudgetMs   = GetPrivateProfileIntW(L"rollback", L"verify_budget_ms", 8, ini);   // build 88
+    {   // build 79: test 78a, Stage 06: 0x444E2C calls rand at a different fight frame on each PC
+        wchar_t lst[256];
+        GetPrivateProfileStringW(L"rollback", L"own_seed_callers", L"", lst, 256, ini);
+        g_cfg.ownSeedN = 0;
+        g_cfg.resetTimers = GetPrivateProfileIntW(L"rollback", L"reset_stage_timers", 1, ini);
+        g_cfg.memList = GetPrivateProfileIntW(L"rollback", L"memory_list", 1, ini);
+        g_cfg.bigWatch = GetPrivateProfileIntW(L"rollback", L"big_block_watch", 1, ini);
+        g_cfg.watchBigMaxKB = GetPrivateProfileIntW(L"rollback", L"watch_big_block_max_kb", 32768, ini);
+        {
+            wchar_t hw[128];
+            GetPrivateProfileStringW(L"rollback", L"hw_watch", L"", hw, 128, ini);
+            int k = 0;
+            for (wchar_t* q = hw; *q && k < 3;) {
+                while (*q == L' ' || *q == L',') q++;
+                if (!*q) break;
+                wchar_t* e; unsigned long v = wcstoul(q, &e, 16);
+                if (e == q) break;
+                if (v) g_cfg.hwWatch[k++] = (uint32_t)v & ~3u;
+                q = e;
+            }
+        }
+        for (wchar_t* q = lst; *q && g_cfg.ownSeedN < 8;) {
+            while (*q == L' ' || *q == L',') q++;
+            if (!*q) break;
+            wchar_t* e; unsigned long v = wcstoul(q, &e, 16);
+            if (e == q) break;
+            if (v) g_cfg.ownSeed[g_cfg.ownSeedN++] = (uint32_t)v;
+            q = e;
+        }
+    }
     if (g_cfg.fakeLag < 0) g_cfg.fakeLag = 0;
     if (g_cfg.fakeLag > 6) g_cfg.fakeLag = 6;
     if (g_cfg.fakeJitter < 0) g_cfg.fakeJitter = 0;
@@ -246,6 +291,169 @@ static void RandLogStats() {
         Log("    first run 0x%08X / replay 0x%08X  %u times", g_randMissPairs[i].first.ex, g_randMissPairs[i].first.got,
             g_randMissPairs[i].second);
 }
+// Build 77: rand trace for the first frames of each fight (test 76b: fight 3's
+// random numbers differed between the PCs by frame 31). Per frame: the seed at the
+// start, how many calls and from where. Both PCs log it; comparing the two logs
+// shows the first frame and the caller that went another way.
+static const uint32_t RT_N = 64, RT_MAXC = 256;
+static uint32_t g_rtRet[RT_N][RT_MAXC];
+static uint32_t g_rtCnt[RT_N], g_rtSeed[RT_N];
+static int g_rtCur = -1;
+static bool g_rtDumped = false;
+static uint32_t g_rtLastFrame = 0;
+static void RandTraceReset() { memset(g_rtCnt, 0, sizeof g_rtCnt); memset(g_rtSeed, 0, sizeof g_rtSeed); g_rtCur = -1; g_rtDumped = false; }
+static void RandTraceBegin(uint32_t f) {
+    g_rtCur = -1;
+    g_rtLastFrame = f;
+    if (f >= RT_N) return;
+    SeedInit();
+    g_rtCur = (int)f; g_rtCnt[f] = 0; g_rtSeed[f] = t_seed;
+}
+static inline void RandTraceEnd() { g_rtCur = -1; }
+static uint32_t RtFrame() { return g_rtLastFrame; }
+static void RandTraceDump(const char* why) {
+    if (g_rtDumped) return;
+    g_rtDumped = true;
+    Log("  rand trace (build 80, %s): frame: seed at start, calls, callers (address x count)", why);
+    for (uint32_t f = 0; f < RT_N; f++) {
+        if (!g_rtCnt[f] && !g_rtSeed[f]) continue;
+        uint32_t n = g_rtCnt[f] < RT_MAXC ? g_rtCnt[f] : RT_MAXC;
+        uint32_t ua[24], uc[24], u = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            uint32_t k = 0;
+            while (k < u && ua[k] != g_rtRet[f][i]) k++;
+            if (k == u) { if (u == 24) continue; ua[u] = g_rtRet[f][i]; uc[u] = 0; u++; }
+            uc[k]++;
+        }
+        char buf[600]; int m = snprintf(buf, sizeof buf, "    f%u: %08X, %u calls:", f, g_rtSeed[f], g_rtCnt[f]);
+        for (uint32_t k = 0; k < u && m < 560; k++) m += snprintf(buf + m, sizeof buf - m, (ua[k] & 0x80000000u) ? " %06X(own seed) x%u" : " %06X x%u", ua[k] & 0x7FFFFFFFu, uc[k]);
+        Log("%s", buf);
+    }
+}
+// build 80: the real caller of the game's rand wrapper 0x4C9260 (test 79a: the
+// first code-looking value on the stack was a stale local, 0x444E2C). The wrapper
+// keeps 0x1C bytes of locals, then the saved ebp and its return address; the small
+// helpers 0x4C93C0 / 0x4C94A0 / 0x4C92F1-loop are skipped through their saved ebp.
+static uint32_t RandRealCaller(const uint32_t* sp) {   // sp[0] = 0x4C9298
+    uint32_t ebp = sp[8], ret = sp[9];
+    for (int hop = 0; hop < 2; hop++) {
+        bool helper = (ret >= 0x004C93C0 && ret < 0x004C9496) || (ret >= 0x004C94A0 && ret < 0x004C94D3) ||
+                      (ret >= 0x004C9260 && ret < 0x004C93C0);
+        if (!helper || ebp < 0x00010000 || (ebp & 3)) break;
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((void*)ebp, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) break;
+        uint32_t nebp = ((const uint32_t*)ebp)[0];
+        ret = ((const uint32_t*)ebp)[1];
+        ebp = nebp;
+    }
+    return ret;
+}
+
+// ---------------------------------------------------------------------------
+// Build 80: game timers with a random interval (function 0x41E880, this = timer,
+// one float argument = step, 1.0 per frame). Test 79a: a Stage 06 timer at
+// 0x051EAC84 ticks before the fight starts, a different number of times on each
+// PC (loading speed), so its random wait ran out at fight frame 19 on one PC and
+// frame 11 on the other, and from then on the two PCs' random numbers differed.
+// We note every timer the game ticks; at fight start both PCs put the ones ticked
+// in the last few seconds back to the same starting point (log first, then reset).
+// Fields: +08 on (byte), +0C count (float), +10 length (int), +14 skip once (byte),
+// +18 / +1C waits (float), +20 random extra (int), +24 base wait (int).
+// ---------------------------------------------------------------------------
+struct TimerSeenE { uint32_t obj; uint32_t lastMs; uint32_t ticks; };
+static TimerSeenE g_timers[512];
+static uint32_t g_timerN = 0, g_timerFull = 0;
+extern "C" void __cdecl TimerSeen(uint32_t obj) {
+    if (!OnGameThread()) return;
+    uint32_t now = GetTickCount();
+    for (uint32_t i = 0; i < g_timerN; i++) if (g_timers[i].obj == obj) { g_timers[i].lastMs = now; g_timers[i].ticks++; return; }
+    if (g_timerN < 512) g_timers[g_timerN++] = {obj, now, 1};
+    else g_timerFull++;
+}
+extern "C" { void S_TimerTick(); uint32_t g_timerCont = 0x0041E887; }
+__asm__(".text\n.p2align 4\n.globl _S_TimerTick\n_S_TimerTick:\n"
+        "\tpushl %ecx\n\tpushl %ecx\n\tcall _TimerSeen\n\taddl $4, %esp\n\tpopl %ecx\n"
+        "\tpushl %ebp\n\tmovl %esp, %ebp\n\tpushl %ecx\n\tmovl %ecx, -4(%ebp)\n"
+        "\tjmp *_g_timerCont\n");
+static bool HookTimers() {
+    static const uint8_t expect[7] = {0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC};
+    if (!util::BytesMatch(0x0041E880, expect, 7)) { Log("timer hook: code at 0x41E880 is not what we expect; stage timers are not reset"); return true; }
+    return util::WriteRel32(0x0041E880, 0xE9, (void*)S_TimerTick);
+}
+static bool TimerReadable(uint32_t a) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (a < 0x00010000 || !VirtualQuery((void*)a, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return false;
+    if (!(mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) || (mbi.Protect & PAGE_GUARD)) return false;
+    return a + 0x28 <= (uint32_t)mbi.BaseAddress + mbi.RegionSize;
+}
+static void TimersAtFightStart() {
+    uint32_t now = GetTickCount();
+    std::sort(g_timers, g_timers + g_timerN, [](const TimerSeenE& a, const TimerSeenE& b) { return a.obj < b.obj; });
+    uint32_t recent = 0, reset = 0;
+    for (uint32_t i = 0; i < g_timerN; i++) {
+        TimerSeenE& t = g_timers[i];
+        if (now - t.lastMs > 500) continue;      // still ticking in the fight now (both PCs alike)
+        recent++;
+        if (!TimerReadable(t.obj)) continue;
+        uint8_t* o = (uint8_t*)t.obj;
+        uint8_t on = o[8];
+        int32_t len = *(int32_t*)(o + 0x10), extra = *(int32_t*)(o + 0x20), base = *(int32_t*)(o + 0x24);
+        if (on > 1 || len < 0 || len > 1000000 || extra < 0 || extra > 1000000 || base < 0 || base > 1000000) continue;
+        if (recent <= 40)
+            Log("  stage timer 0x%08X: on %u, count %.1f of %d, skip %u, waits %.1f / %.1f (base %d + random %d), %u ticks seen",
+                t.obj, on, *(float*)(o + 0xC), len, o[0x14], *(float*)(o + 0x18), *(float*)(o + 0x1C), base, extra, t.ticks);
+        if (g_cfg.resetTimers) {
+            *(float*)(o + 0xC) = 0.0f; o[0x14] = 0; *(float*)(o + 0x18) = 0.0f; *(float*)(o + 0x1C) = 0.0f;
+            reset++;
+        }
+    }
+    Log("  stage timers: %u known, %u still ticking, %u reset to the same start on both PCs%s",
+        g_timerN, recent, reset, g_timerFull ? " (table full, some not noted)" : "");
+    for (uint32_t i = 0; i < g_timerN; i++) g_timers[i].ticks = 0;
+}
+
+// build 79: own seed for PC-dependent callers, plus a one-time dump of the code around
+// them (for working out what the call depends on; the dump stays on this PC).
+static uint32_t g_ownSeed = 0x0BADF00Du;
+static uint32_t g_ownSeedCalls = 0, g_ownSeedFightCalls = 0, g_ownSeedLogs = 0;
+static bool g_codeDumped = false;
+static uint32_t RtFrame();
+static void CodeDumpRange(FILE* f, uint32_t a, uint32_t len) {
+    if (a < 0x00401000) a = 0x00401000;
+    if (a + len > 0x0065C000) len = 0x0065C000 - a;
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery((void*)a, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return;
+    uint32_t hdr[2] = {a, len};
+    fwrite(hdr, 4, 2, f); fwrite((void*)a, 1, len, f);
+}
+static void OwnSeedHit(uint32_t who, const uint32_t* sp) {
+    g_ownSeedCalls++; g_ownSeedFightCalls++;
+    if (g_ownSeedLogs < 6) {
+        g_ownSeedLogs++;
+        char buf[400]; int m = snprintf(buf, sizeof buf, "  own seed: rand call from 0x%06X (fight frame %u), stack:", who, RtFrame());
+        for (int i = 0; i < 24 && m < 380; i++) m += snprintf(buf + m, sizeof buf - m, " %08X", sp[i]);
+        Log("%s", buf);
+    }
+    if (g_codeDumped) return;
+    g_codeDumped = true;
+    wchar_t path[MAX_PATH];
+    _snwprintf(path, MAX_PATH, L"%lsrollback_codedump.bin", util::ModDir());
+    FILE* f = _wfopen(path, L"wb");
+    if (!f) return;
+    CodeDumpRange(f, (who & ~0xFFFu) - 0x1000, 0x3000);   // the caller's function and its neighbours
+    CodeDumpRange(f, 0x004C9000, 0x800);                   // the rand wrapper
+    uint32_t done[8]; int nd = 0;
+    for (int i = 0; i < 48 && nd < 8; i++) {               // the functions further up the stack
+        uint32_t v = sp[i];
+        if (!IsCodeAddr(v) || v == 0x004C9298 || (v >= (who & ~0xFFFu) - 0x1000 && v < (who & ~0xFFFu) + 0x2000)) continue;
+        bool seen = false; for (int k = 0; k < nd; k++) if (done[k] == (v & ~0x7FFu)) seen = true;
+        if (seen) continue;
+        done[nd++] = v & ~0x7FFu;
+        CodeDumpRange(f, (v & ~0x7FFu) - 0x800, 0x1000);
+    }
+    fclose(f);
+    Log("  own seed: wrote rollback_codedump.bin (code around 0x%06X and %d callers)", who, nd);
+}
 extern "C" int __attribute__((noinline)) __cdecl ModRand() {
     if (OnGameThread() && !g_inUpdate.load(std::memory_order_relaxed)) {
         g_randOutside++;
@@ -253,8 +461,33 @@ extern "C" int __attribute__((noinline)) __cdecl ModRand() {
         t_seedOut = t_seedOut * 214013u + 2531011u;
         return static_cast<int>((t_seedOut >> 16) & 0x7FFF);
     }
+    // build 79: random numbers for game code whose timing differs between PCs (test 78a:
+    // 0x444E2C at fight frame 19 on one PC, frame 11 or later on the other) come from their own
+    // seed, so the shared seed the fight logic uses stays the same on both PCs.
+    if (g_cfg.ownSeedN) {
+        uint32_t ret0 = *(const uint32_t*)((uint8_t*)__builtin_frame_address(0) + 8);
+        if (ret0 == 0x004C9298) {
+            uint32_t who = RandRealCaller((const uint32_t*)((uint8_t*)__builtin_frame_address(0) + 8));
+            for (int i = 0; i < g_cfg.ownSeedN; i++) if (who == g_cfg.ownSeed[i]) {
+                OwnSeedHit(who, (const uint32_t*)((uint8_t*)__builtin_frame_address(0) + 8));
+                if (g_rtCur >= 0) { uint32_t& c = g_rtCnt[g_rtCur]; if (c < RT_MAXC) g_rtRet[g_rtCur][c] = who | 0x80000000u; c++; }
+                g_ownSeed = g_ownSeed * 214013u + 2531011u;
+                return static_cast<int>((g_ownSeed >> 16) & 0x7FFF);
+            }
+        }
+    }
     if (Watching()) {
         g_randCallsInUpdate++;
+        if (g_rtCur >= 0) {
+            uint32_t& c = g_rtCnt[g_rtCur];
+            if (c < RT_MAXC) {
+                uint32_t ret = *(const uint32_t*)((uint8_t*)__builtin_frame_address(0) + 8);
+                // build 78: every game call goes through one wrapper (0x4C9298, test 77a): log who called the wrapper
+                if (ret == 0x004C9298) ret = RandRealCaller((const uint32_t*)((uint8_t*)__builtin_frame_address(0) + 8));
+                g_rtRet[g_rtCur][c] = ret;
+            }
+            c++;
+        }
         if (g_randMode && g_randCur) {
             RandCall rc;
             // Entered through the stack-wiping stub: the game's return address is one slot further.
@@ -434,6 +667,8 @@ void* g_wt_HeapAlloc; void* g_wt_HeapFree; void* g_wt_HeapReAlloc;
 void* g_wt_CuePlay; void* g_wt_CueStop; void* g_wt_CueGetState; void* g_wt_CueDestroy;
 void* g_wt_SbPrepare; void* g_wt_SbPlay; void* g_wt_Rand;
 void* g_wt_CreateFileW; void* g_wt_CreateFileA; void* g_wt_CloseHandle;
+void* g_wt_VirtualAlloc; void* g_wt_VirtualFree;
+void S_VirtualAlloc(); void S_VirtualFree();
 void S_timeGetTime(); void S_QPC(); void S_GetTickCount();
 void S_HeapAlloc(); void S_HeapFree(); void S_HeapReAlloc();
 void S_CuePlay(); void S_CueStop(); void S_CueGetState(); void S_CueDestroy();
@@ -499,6 +734,8 @@ __asm__(".text\n"
         WIPE_STUB(CreateFileW, 7, 8192)
         WIPE_STUB(CreateFileA, 7, 8192)
         WIPE_STUB(CloseHandle, 1, 4096)
+        WIPE_STUB(VirtualAlloc, 4, 8192)
+        WIPE_STUB(VirtualFree, 3, 8192)
         ".globl _wipe_stubs_end\n_wipe_stubs_end:\n"
         ".text\n");
 static inline bool InWipeStub(uint32_t a) {
@@ -1049,6 +1286,8 @@ static void CloseForReal(uint32_t h) {      // called with g_jLock held
     g_fileClosed++;
 }
 
+#include "heapdiag.inc"
+#include "vmfree.inc"
 static void ReleaseFrees(Journal& j) {      // really free what the game freed earlier
     JLock lock;
     for (uint32_t h : j.fileCloses) CloseForReal(h);
@@ -1064,6 +1303,7 @@ static void ReleaseFrees(Journal& j) {      // really free what the game freed e
             if (b >= 0) g_blockDead[b] = 2;     // 2 = released by us, safe
         }
         g_own.Erase(p);
+        HevAdd(HEV_FREE_LATE, p, HevSize(heap, (LPVOID)p), 0);
         o_HeapFree(heap, 0, (LPVOID)p);
         g_released++;
     }
@@ -1083,7 +1323,12 @@ static inline LPVOID Own(HANDLE h, LPVOID p) {
     return p;
 }
 static LPVOID WINAPI H_HeapAlloc(HANDLE h, DWORD f, SIZE_T n) {
-    if (!(Watching() && h == CrtHeap())) return Own(h, o_HeapAlloc(h, f, n));
+    if (!(Watching() && h == CrtHeap())) {
+        LPVOID q = Own(h, o_HeapAlloc(h, f, n));
+        if (q && h == CrtHeap()) HevAdd(HEV_ALLOC, (uint32_t)q, (uint32_t)n, OnGameThread() ? MallocCaller(GAME_RET(3)) : 0);
+        else if (q) HevAdd(HEV_OTHER_ALLOC, (uint32_t)q, (uint32_t)n, OnGameThread() ? GAME_RET(3) : 0);   // build 75
+        return q;
+    }
     uint32_t caller = MallocCaller(GAME_RET(3));
     g_apiCount[A_HeapAlloc]++;
     g_sites[A_HeapAlloc].Hit(caller);
@@ -1104,10 +1349,13 @@ static LPVOID WINAPI H_HeapAlloc(HANDLE h, DWORD f, SIZE_T n) {
             p = (LPVOID)v[k].ptr;
             if (f & HEAP_ZERO_MEMORY) memset(p, 0, n);
             g_dyn.push_back({(uint32_t)p, (uint32_t)n});
+            HevAdd(HEV_REUSE, (uint32_t)p, (uint32_t)n, caller);
             return p;
         }
         g_allocMiss++;
-        return Own(h, o_HeapAlloc(h, f, n));         // replay went a different way; just allocate
+        p = Own(h, o_HeapAlloc(h, f, n));            // replay went a different way; just allocate
+        HevAdd(HEV_ALLOC, (uint32_t)p, (uint32_t)n, caller);
+        return p;
     }
     if (g_jmode == JMode::Resim && g_jcur && g_jold) {
         JLock lock;
@@ -1120,8 +1368,10 @@ static LPVOID WINAPI H_HeapAlloc(HANDLE h, DWORD f, SIZE_T n) {
             while (g_jIdx < v.size() && v[g_jIdx].used) g_jIdx++;
             p = (LPVOID)v[k].ptr;
             if (f & HEAP_ZERO_MEMORY) memset(p, 0, n);
+            HevAdd(HEV_REUSE, (uint32_t)p, (uint32_t)n, caller);
         } else {
             p = Own(h, o_HeapAlloc(h, f, n));
+            HevAdd(HEV_ALLOC, (uint32_t)p, (uint32_t)n, caller);
         }
         if (p) {
             g_jcur->allocs.push_back({(uint32_t)p, (uint32_t)n, site, 0});
@@ -1130,6 +1380,7 @@ static LPVOID WINAPI H_HeapAlloc(HANDLE h, DWORD f, SIZE_T n) {
         return p;
     }
     p = Own(h, o_HeapAlloc(h, f, n));
+    HevAdd(HEV_ALLOC, (uint32_t)p, (uint32_t)n, caller);
     if (p && g_jmode == JMode::Record && g_jcur) {
         JLock lock;
         g_jcur->allocs.push_back({(uint32_t)p, (uint32_t)n, AllocSite(), 0});
@@ -1154,11 +1405,13 @@ static BOOL WINAPI H_HeapFree(HANDLE h, DWORD f, LPVOID p) {
                 JLock lock;
                 if (!FreePending((uint32_t)p)) g_jcur->frees.push_back((uint32_t)p);
                 DynRemove((uint32_t)p);
+                HevAdd(HEV_FREE_DELAY, (uint32_t)p, HevSize(h, p), t_lastFreeSite);
                 return TRUE;
             }
             if (g_jmode == JMode::Replay) {             // already freed in the original run
                 JLock lock;
                 DynRemove((uint32_t)p);
+                HevAdd(HEV_FREE_IGNORED, (uint32_t)p, HevSize(h, p), t_lastFreeSite);
                 return TRUE;
             }
         }
@@ -1170,12 +1423,15 @@ static BOOL WINAPI H_HeapFree(HANDLE h, DWORD f, LPVOID p) {
             if (g_jOutside && DynContains((uint32_t)p)) {
                 DynRemove((uint32_t)p);
                 if (!FreePending((uint32_t)p)) g_jOutside->frees.push_back((uint32_t)p);
+                HevAdd(HEV_FREE_DELAY_OUT, (uint32_t)p, HevSize(h, p), OnGameThread() ? t_lastFreeSite : 0);
                 return TRUE;
             }
         }
+        HevAdd(HEV_FREE_NOW, (uint32_t)p, HevSize(h, p), OnGameThread() ? t_lastFreeSite : 0);
         NoteFree((uint32_t)p);      // before the real free, so we never touch freed memory
     }
     if (p && h == CrtHeap()) g_own.Erase((uint32_t)p);
+    if (p && h != CrtHeap() && HeldOtherHeapFree(h, p)) return TRUE;   // build 75
     return o_HeapFree(h, f, p);
 }
 static LPVOID WINAPI H_HeapReAlloc(HANDLE h, DWORD f, LPVOID p, SIZE_T n) {
@@ -1185,6 +1441,7 @@ static LPVOID WINAPI H_HeapReAlloc(HANDLE h, DWORD f, LPVOID p, SIZE_T n) {
             g_sites[A_HeapReAlloc].Hit(GAME_RET(4));
             if (g_jmode != JMode::Off) g_reallocs++;   // not handled yet; reported and test stops
         }
+        HevAdd(HEV_REALLOC, (uint32_t)p, HevSize(h, p), 0);
         NoteFree((uint32_t)p);
         g_own.Erase((uint32_t)p);
         LPVOID q = o_HeapReAlloc(h, f, p, n);
@@ -1724,11 +1981,125 @@ static void FilePositionsRestore() {
 }
 
 static void DtTouchRange(uint32_t a, uint32_t n);
+// ---------------------------------------------------------------------------
+// Build 82: big heap blocks left out of the saved state (over watch_block_max_kb;
+// test 81a: 11-125 MB). Test 81a crashed after a rollback replay went another way
+// (Bisclavret's assist B). Suspect: the fight writes one of these blocks, so a
+// rewind cannot put it back. They are made read-only at fight start; the first
+// write to each page is noted (game logic in the update, game thread outside it,
+// or another thread) and the page made writable again. Listed at fight end and in
+// a crash report.
+// ---------------------------------------------------------------------------
+struct BigBlk { uint32_t start, size, lo, hi; uint32_t upd, outside, thr, firstEip, firstFrame, firstPage; };
+static std::vector<BigBlk> g_big;
+static uint8_t* g_bigArmed = nullptr;            // one bit per 4 KB page of the address space
+static std::atomic_flag g_bigSpin = ATOMIC_FLAG_INIT;
+static bool g_bigHandler = false;
+struct BigEv { uint32_t page, eip, frame; int mode; uint8_t kind; };
+static BigEv g_bigEv[64];
+static std::atomic<uint32_t> g_bigEvN{0};
+static inline bool BigArmed(uint32_t pg) { uint32_t i = pg >> 12; return g_bigArmed && ((g_bigArmed[i >> 3] >> (i & 7)) & 1); }
+static inline void BigSet(uint32_t pg, bool on) { uint32_t i = pg >> 12; if (on) g_bigArmed[i >> 3] |= (uint8_t)(1 << (i & 7)); else g_bigArmed[i >> 3] &= (uint8_t)~(1 << (i & 7)); }
+static LONG CALLBACK BigHandler(EXCEPTION_POINTERS* e) {
+    EXCEPTION_RECORD* r = e->ExceptionRecord;
+    if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2 || r->ExceptionInformation[0] != 1 || !g_bigArmed)
+        return EXCEPTION_CONTINUE_SEARCH;
+    uint32_t pg = (uint32_t)r->ExceptionInformation[1] & ~0xFFFu;
+    while (g_bigSpin.test_and_set(std::memory_order_acquire)) {}
+    if (!BigArmed(pg)) {
+        g_bigSpin.clear(std::memory_order_release);
+        MEMORY_BASIC_INFORMATION mi{};
+        for (auto& b : g_big) if (pg >= b.lo && pg < b.hi) {
+            if (VirtualQuery((void*)pg, &mi, sizeof mi) && (mi.Protect & 0xFF) == PAGE_READWRITE) return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    BigSet(pg, false);
+    DWORD old;
+    VirtualProtect((void*)pg, 0x1000, PAGE_READWRITE, &old);
+    bool game = GetCurrentThreadId() == g_gameTid;
+    uint8_t kind = game ? (g_inUpdate.load(std::memory_order_relaxed) ? 0 : 1) : 2;
+    for (auto& b : g_big) if (pg >= b.lo && pg < b.hi) {
+        if (kind == 0) { if (b.upd++ == 0) { b.firstEip = e->ContextRecord->Eip; b.firstFrame = g_frame; b.firstPage = pg; } }
+        else if (kind == 1) b.outside++;
+        else b.thr++;
+        break;
+    }
+    if (kind == 0) {
+        uint32_t k = g_bigEvN.fetch_add(1);
+        if (k < 64) g_bigEv[k] = {pg, (uint32_t)e->ContextRecord->Eip, g_frame, (int)g_mode, kind};
+    }
+    g_bigSpin.clear(std::memory_order_release);
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+static void BigAdd(uint32_t start, uint32_t size) {
+    uint32_t lo = (start + 0xFFF) & ~0xFFFu, hi = (start + size) & ~0xFFFu;
+    if (hi > lo) g_big.push_back({start, size, lo, hi, 0, 0, 0, 0, 0, 0});
+}
+static inline double NowMsEarly();
+static void BigArm() {
+    if (g_big.empty()) return;
+    if (!g_cfg.bigWatch) { g_big.clear(); return; }
+    if (!g_bigArmed) { g_bigArmed = (uint8_t*)VirtualAlloc(nullptr, 1u << 17, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE); if (!g_bigArmed) return; }
+    if (!g_bigHandler) { AddVectoredExceptionHandler(1, BigHandler); g_bigHandler = true; }
+    g_bigEvN = 0;
+    double t0 = NowMsEarly();
+    uint32_t pages = 0;
+    for (auto& b : g_big) {
+        for (uint32_t a = b.lo; a < b.hi;) {          // region by region: only plain read-write committed pages
+            MEMORY_BASIC_INFORMATION mi{};
+            if (!VirtualQuery((void*)a, &mi, sizeof mi)) break;
+            uint32_t rEnd = std::min((uint32_t)mi.BaseAddress + (uint32_t)mi.RegionSize, b.hi);
+            if (mi.State == MEM_COMMIT && mi.Protect == PAGE_READWRITE) {
+                while (g_bigSpin.test_and_set(std::memory_order_acquire)) {}
+                for (uint32_t pg = a; pg < rEnd; pg += 0x1000) BigSet(pg, true);
+                DWORD old;
+                VirtualProtect((void*)a, rEnd - a, PAGE_READONLY, &old);
+                g_bigSpin.clear(std::memory_order_release);
+                pages += (rEnd - a) >> 12;
+            }
+            a = rEnd;
+        }
+    }
+    Log("  big-block watch: %u left-out blocks (%u pages) made read-only to see who writes them (%.1f ms)", (unsigned)g_big.size(), pages, NowMsEarly() - t0);
+}
+static bool BigReleaseRange(uint32_t a, uint32_t n) {     // ReadFile into a watched page: let it through
+    if (!g_bigArmed || g_big.empty()) return false;
+    bool any = false;
+    while (g_bigSpin.test_and_set(std::memory_order_acquire)) {}
+    for (uint32_t pg = a & ~0xFFFu; pg < a + n; pg += 0x1000) if (BigArmed(pg)) {
+        BigSet(pg, false); DWORD old; VirtualProtect((void*)pg, 0x1000, PAGE_READWRITE, &old); any = true;
+    }
+    g_bigSpin.clear(std::memory_order_release);
+    return any;
+}
+static void BigReport(const char* why) {
+    if (g_big.empty()) return;
+    Log("  big-block watch (%s): writes to the left-out blocks this fight:", why);
+    for (auto& b : g_big) {
+        if (b.upd) Log("    block 0x%08X (%u bytes): %u pages written by the GAME LOGIC (first: page +0x%X by 0x%08X at frame %u), %u by the game thread outside the update, %u by other threads",
+                       b.start, b.size, b.upd, b.firstPage - b.start, b.firstEip, b.firstFrame, b.outside, b.thr);
+        else Log("    block 0x%08X (%u bytes): not written by the game logic (%u pages by the game thread outside the update, %u by other threads)",
+                 b.start, b.size, b.outside, b.thr);
+    }
+    uint32_t n = std::min<uint32_t>(g_bigEvN.load(), 64);
+    for (uint32_t i = 0; i < n && i < 24; i++)
+        Log("    game-logic write %u: page 0x%08X by 0x%08X at frame %u (mode %d)", i + 1, g_bigEv[i].page, g_bigEv[i].eip, g_bigEv[i].frame, g_bigEv[i].mode);
+}
+static void BigDisarm() {
+    if (!g_bigArmed) { g_big.clear(); return; }
+    while (g_bigSpin.test_and_set(std::memory_order_acquire)) {}
+    for (auto& b : g_big)
+        for (uint32_t pg = b.lo; pg < b.hi; pg += 0x1000)
+            if (BigArmed(pg)) { BigSet(pg, false); DWORD old; VirtualProtect((void*)pg, 0x1000, PAGE_READWRITE, &old); }
+    g_bigSpin.clear(std::memory_order_release);
+    g_big.clear();
+}
 static BOOL WINAPI H_ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPOVERLAPPED ov) {
     FileBeforeRead(h, ov);
     DtTouchRange((uint32_t)buf, n);
     BOOL ok = o_ReadFile(h, buf, n, got, ov);
-    if (!ok && n && GetLastError() == ERROR_NOACCESS && HuntReleaseRange((uint32_t)buf, n)) {
+    if (!ok && n && GetLastError() == ERROR_NOACCESS && (HuntReleaseRange((uint32_t)buf, n) | BigReleaseRange((uint32_t)buf, n))) {
         g_wReadRetries++;
         return o_ReadFile(h, buf, n, got, ov);
     }
@@ -2061,11 +2432,19 @@ static uint32_t g_deltaRuns = 0, g_deltaBytes = 0, g_deltaFrames = 0, g_deltaSki
 // count as dirty, which saves a fault per frame. Small chunks, input memory
 // and heap pages shared with other memory are always copied.
 // ---------------------------------------------------------------------------
+static inline double NowMsEarly() {          // build 72: same clock as NowMs, usable before it
+    static double qpcMs = 0;
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    if (qpcMs == 0) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); qpcMs = 1000.0 / (double)f.QuadPart; }
+    return (double)t.QuadPart * qpcMs;
+}
 namespace dt {
 struct Page { uint32_t addr; DWORD prot; uint32_t first, count; };
 static std::vector<Page> pages;            // sorted by address
 static std::vector<uint32_t> pageChunks;   // state positions on each page
 static std::vector<uint8_t> armed, pending, streak, hotLeft, dead;
+static std::vector<uint32_t> writes;      // build 72: save points at which the page had been written (cost report)
 static std::vector<uint32_t> lastArm;
 static std::vector<uint32_t> unarmed;      // page indices not armed (capacity reserved: no allocation in the handler)
 static std::vector<uint8_t> dirty, always; // per state position
@@ -2131,7 +2510,17 @@ static LONG CALLBACK DirtyHandler(EXCEPTION_POINTERS* e) {
 // Put every page back to how it was and stop tracking.
 static void DtDisarm() {
     DtLock();
-    for (uint32_t i = 0; i < dt::pages.size(); i++) if (dt::armed[i]) DtUnarmPage(i);
+    // Build 73: neighbouring armed pages in one call (test 72a: one call per page, a big part of 117 ms).
+    for (uint32_t i = 0; i < dt::pages.size();) {
+        if (!dt::armed[i]) { i++; continue; }
+        uint32_t j = i + 1;
+        while (j < dt::pages.size() && dt::armed[j] && dt::pages[j].addr == dt::pages[j - 1].addr + addr::PAGE && dt::pages[j].prot == dt::pages[i].prot) j++;
+        DWORD old;
+        if (!VirtualProtect((void*)dt::pages[i].addr, (j - i) * addr::PAGE, dt::pages[i].prot, &old))
+            for (uint32_t q = i; q < j; q++) VirtualProtect((void*)dt::pages[q].addr, addr::PAGE, dt::pages[q].prot, &old);
+        for (uint32_t q = i; q < j; q++) dt::armed[q] = 0;
+        i = j;
+    }
     dt::unarmed.clear();
     dt::active = false;
     dt::builtCount = 0;
@@ -2182,6 +2571,7 @@ static void DtBoundary() {
     uint64_t hot = 0;
     for (size_t k = 0; k < u.size(); k++) {
         uint32_t i = u[k];
+        if (i < dt::writes.size()) dt::writes[i]++;   // build 72: written since the last save point (or kept hot)
         if (dt::dead[i]) continue;
         if (dt::hotLeft[i] > 0) { dt::hotLeft[i]--; DtDirtyPage(i); u[keep++] = i; hot++; continue; }
         if (!DtPageAlive(i)) {          // a block the game freed: never arm it again
@@ -2203,8 +2593,16 @@ static inline bool DtChunkArmed(uint32_t pos) {   // with the lock held
     return true;
 }
 // Build the page list for the current state and arm every page.
+static void PerfFlushPageWrites();
+static uint32_t g_dtBuilds = 0;
 static void DtBuild() {
+    double tb0 = NowMsEarly();
+    // Build 73: pages written every frame ("hot") stay hot across a rebuild, so
+    // the rebuild does not cause a burst of faults (test 72a: 907 the next frame).
+    std::vector<std::pair<uint32_t, uint8_t>> hotKeep;
+    for (size_t i = 0; i < dt::pages.size() && i < dt::hotLeft.size(); i++) if (dt::hotLeft[i]) hotKeep.push_back({dt::pages[i].addr, dt::hotLeft[i]});
     if (dt::active) DtDisarm();
+    PerfFlushPageWrites();
     if (!g_cfg.dirtyTracking) return;
     if (!dt::handlerOn) { AddVectoredExceptionHandler(1, DirtyHandler); dt::handlerOn = true; }
     DtLock();
@@ -2217,6 +2615,8 @@ static void DtBuild() {
     std::vector<std::pair<uint32_t, uint32_t>> pp;     // (page, position)
     std::vector<std::pair<uint32_t, DWORD>> protOf;
     dt::alwaysBytes = 0;
+    MEMORY_BASIC_INFORMATION mi{};       // build 73: last region queried (see below)
+    uint32_t miLo = 1, miHi = 0;
     for (uint32_t pos = 0; pos < n; pos++) {
         const Chunk& c = g_chunks[g_state[pos]];
         dt::cur[pos] = ++dt::ver;
@@ -2229,8 +2629,12 @@ static void DtBuild() {
         if (ok && InInputRanges(c.addr, c.len)) ok = false;   // the input code writes these every frame anyway
         std::vector<std::pair<uint32_t, DWORD>> mine;
         for (uint32_t pg = lo; ok && pg < hi; pg += addr::PAGE) {
-            MEMORY_BASIC_INFORMATION mi{};
-            if (!VirtualQuery((void*)pg, &mi, sizeof mi) || mi.State != MEM_COMMIT) { ok = false; break; }
+            // Build 73: one query per memory region, not per page.
+            if (pg < miLo || pg >= miHi) {
+                if (!VirtualQuery((void*)pg, &mi, sizeof mi)) { miLo = 1; miHi = 0; ok = false; break; }
+                miLo = (uint32_t)mi.BaseAddress; miHi = miLo + (uint32_t)mi.RegionSize;
+            }
+            if (mi.State != MEM_COMMIT) { ok = false; break; }
             DWORD p = mi.Protect & 0xFF;
             if ((p != PAGE_READWRITE && p != PAGE_WRITECOPY) || (mi.Protect & (PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE))) { ok = false; break; }
             mine.push_back({pg, mi.Protect});
@@ -2263,6 +2667,8 @@ static void DtBuild() {
     dt::hotLeft.assign(np, 0);
     dt::dead.assign(np, 0);
     dt::lastArm.assign(np, 0);
+    dt::writes.assign(np, 0);
+    for (auto& hk : hotKeep) { int k = DtFind(hk.first); if (k >= 0) dt::hotLeft[k] = hk.second; }
     dt::unarmed.clear();
     dt::unarmed.reserve(np + 16);
     for (uint32_t i = 0; i < np; i++) dt::unarmed.push_back(i);   // armed at the next boundary
@@ -2271,8 +2677,9 @@ static void DtBuild() {
     dt::builtBytes = g_stateBytes;
     dt::active = true;
     DtUnlock();
-    Log("  changed-memory tracking ON: %u pages watched, %u KB always copied (small pieces, shared heap pages, input)",
-        (unsigned)np, dt::alwaysBytes / 1024);
+    g_dtBuilds++;
+    Log("  changed-memory tracking ON: %u pages watched, %u KB always copied (small pieces, shared heap pages, input); page list built in %.1f ms (build %u this fight, frame %u)",
+        (unsigned)np, dt::alwaysBytes / 1024, NowMsEarly() - tb0, g_dtBuilds, g_frame);
 }
 static inline void DtEnsure() {
     if (!g_cfg.dirtyTracking) return;
@@ -2599,6 +3006,7 @@ static void ReportDiff(uint32_t frame) {
     if (detailed || g_diffEvents % 60 == 1)
         Log("DESYNC frame %u depth %d: %u differing ranges, %u bytes, %u new heap blocks differ%s", frame, g_cfg.depth,
             ranges, bytes, dynBad, seedBad ? ", rand seed differs" : "");
+    if (detailed) HwReport("desync");     // build 85
 }
 
 // ---------------------------------------------------------------------------
@@ -2637,7 +3045,7 @@ static uint64_t g_hWatchHeap = 0;
 static bool g_hHandler = false;
 static const uint32_t kHuntBusy = 60;         // writes outside the game logic before we stop watching a page
 // Copies of pages taken right before their first write (filled by the handler).
-static const uint32_t kPreCap = 2048;
+static const uint32_t kPreCap = 4608;      // build 83: one whole 16.5 MB block written in one frame fits (was 2048)
 static uint8_t* g_hPre = nullptr;
 static uint32_t g_hPreAddr[kPreCap];
 static std::atomic<uint32_t> g_hPreN{0};
@@ -2651,6 +3059,104 @@ static uint32_t g_hPreLostTotal = 0;
 // when the game logic writes them in that fight.
 static std::vector<uint32_t> g_heapKeptSizes;
 static const uint32_t kKeepSizeMax = 4u << 20;
+static std::unordered_set<uint32_t> g_bigChunksIn;   // build 83: chunks of big blocks already in the state
+static uint32_t g_bigPageLogs = 0, g_hBigPages = 0;
+static uint32_t g_bigWriterStack[12], g_bigWriterStackN = 0;   // build 84
+static bool g_bigWriterLogged = false;
+// Build 81: memory list. What the memory watch adds in a fight (.data pages by
+// address, heap blocks by size, with the code that wrote them first) is merged
+// into rollback_memlist.txt next to the DLL at fight end, and read back at the
+// first fight of the next session, so it is in the state from the start. The
+// collected list becomes the mod's built-in list later (step 5).
+struct MlEntry { uint8_t heap; uint32_t key, fights, eip; };
+static std::vector<MlEntry> g_ml;
+static bool g_mlLoaded = false;
+static uint32_t g_mlFightsTotal = 0;
+static std::vector<std::pair<uint32_t, uint32_t>> g_mlFightPages, g_mlFightSizes;   // key, first writer
+static void MemListPath(wchar_t* path) { _snwprintf(path, MAX_PATH, L"%lsrollback_memlist.txt", util::ModDir()); }
+#include "memlist_builtin.h"
+static bool MlMergeKnown(uint8_t heap, uint32_t key, uint32_t fights) {
+    for (auto& m : g_ml) if (m.heap == heap && m.key == key) { if (fights > m.fights) m.fights = fights; return true; }
+    return false;
+}
+static void MemListLoad() {
+    if (g_mlLoaded) return;
+    g_mlLoaded = true;
+    // Build 87: the built-in list first (always on).
+    uint32_t bp = 0, bs = 0;
+    for (const MlBuiltin& b : kMlBuiltinData) {
+        g_ml.push_back({0, b.key, b.fights, b.writer});
+        if (std::find(g_huntKept.begin(), g_huntKept.end(), b.key) == g_huntKept.end()) { g_huntKept.push_back(b.key); bp++; }
+    }
+    for (const MlBuiltin& b : kMlBuiltinHeap) {
+        g_ml.push_back({1, b.key, b.fights, b.writer});
+        if (std::find(g_heapKeptSizes.begin(), g_heapKeptSizes.end(), b.key) == g_heapKeptSizes.end()) { g_heapKeptSizes.push_back(b.key); bs++; }
+    }
+    g_mlFightsTotal = kMlBuiltinFights;
+    Log("memory list: built-in list (%u fights recorded): %u .data pages and %u heap block sizes join the state from the start", kMlBuiltinFights, bp, bs);
+    if (!g_cfg.memList) return;
+    wchar_t path[MAX_PATH]; MemListPath(path);
+    FILE* f = _wfopen(path, L"r");
+    if (!f) { Log("memory list: no rollback_memlist.txt yet (it is made at the end of the first fight)"); return; }
+    char line[256];
+    uint32_t pages = 0, sizes = 0;
+    while (fgets(line, sizeof line, f)) {
+        unsigned k = 0, n = 0, e = 0, tot = 0;
+        if (sscanf(line, "# fights recorded: %u", &tot) == 1) { if (tot > g_mlFightsTotal) g_mlFightsTotal = tot; continue; }
+        if (sscanf(line, "data 0x%x fights %u writer 0x%x", &k, &n, &e) == 3) {
+            if (k < addr::DATA_START || (k & (addr::PAGE - 1))) continue;
+            if (MlMergeKnown(0, k, n)) continue;   // build 87: already in the built-in list
+            g_ml.push_back({0, k, n, e});
+            if (std::find(g_huntKept.begin(), g_huntKept.end(), k) == g_huntKept.end()) { g_huntKept.push_back(k); pages++; }
+        } else if (sscanf(line, "heap %u fights %u writer 0x%x", &k, &n, &e) == 3) {
+            if (MlMergeKnown(1, k, n)) continue;
+            g_ml.push_back({1, k, n, e});
+            if (k <= kKeepSizeMax && std::find(g_heapKeptSizes.begin(), g_heapKeptSizes.end(), k) == g_heapKeptSizes.end() && g_heapKeptSizes.size() < 64) {
+                g_heapKeptSizes.push_back(k); sizes++;
+            }
+        }
+    }
+    fclose(f);
+    Log("memory list: read rollback_memlist.txt (%u fights recorded): %u more .data pages and %u more heap block sizes on top of the built-in list",
+        g_mlFightsTotal, pages, sizes);
+}
+static uint32_t g_mlStartMs = 0;
+static void MemListFightStart() { g_mlFightPages.clear(); g_mlFightSizes.clear(); g_mlStartMs = GetTickCount(); }
+static void MemListSave() {
+    if (!g_cfg.memList) return;
+    uint32_t ms = GetTickCount() - g_mlStartMs;   // build 82: rollback fights count no tested frames (test 81a)
+    if (!g_mlStartMs || ms < 10000) { Log("memory list: fight too short (%.1f s), not recorded", ms / 1000.0); return; }
+    g_mlStartMs = 0;
+    uint32_t newP = 0, newS = 0;
+    auto merge = [&](uint8_t heap, std::vector<std::pair<uint32_t, uint32_t>>& v, uint32_t& nw) {
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end(), [](const std::pair<uint32_t, uint32_t>& a, const std::pair<uint32_t, uint32_t>& b) { return a.first == b.first; }), v.end());
+        for (auto& x : v) {
+            bool found = false;
+            for (auto& m : g_ml) if (m.heap == heap && m.key == x.first) { m.fights++; found = true; break; }
+            if (!found) { g_ml.push_back({heap, x.first, 1, x.second}); nw++; }
+        }
+    };
+    merge(0, g_mlFightPages, newP);
+    merge(1, g_mlFightSizes, newS);
+    g_mlFightsTotal++;
+    std::sort(g_ml.begin(), g_ml.end(), [](const MlEntry& a, const MlEntry& b) { return a.heap != b.heap ? a.heap < b.heap : a.key < b.key; });
+    wchar_t path[MAX_PATH]; MemListPath(path);
+    FILE* f = _wfopen(path, L"w");
+    if (!f) { Log("memory list: could not write rollback_memlist.txt"); return; }
+    uint32_t np = 0, ns = 0;
+    for (auto& m : g_ml) (m.heap ? ns : np)++;
+    fprintf(f, "# Arcana Blood rollback: memory list (build 82). What the memory watch found in fights.\n");
+    fprintf(f, "# fights recorded: %u\n", g_mlFightsTotal);
+    fprintf(f, "# %u .data pages, %u heap block sizes. Last fight added %u pages and %u sizes.\n", np, ns, newP, newS);
+    for (auto& m : g_ml) {
+        if (m.heap) fprintf(f, "heap %u fights %u writer 0x%08X\n", m.key, m.fights, m.eip);
+        else fprintf(f, "data 0x%08X fights %u writer 0x%08X\n", m.key, m.fights, m.eip);
+    }
+    fclose(f);
+    Log("memory list: this fight found %u .data pages and %u heap block sizes, %u and %u of them new; the list now has %u pages and %u sizes from %u fights",
+        (unsigned)g_mlFightPages.size(), (unsigned)g_mlFightSizes.size(), newP, newS, np, ns, g_mlFightsTotal);
+}
 static inline void HLock() { while (g_hSpin.test_and_set(std::memory_order_acquire)) {} }
 static inline void HUnlock() { g_hSpin.clear(std::memory_order_release); }
 
@@ -2685,6 +3191,12 @@ static LONG CALLBACK HuntHandler(EXCEPTION_POINTERS* e) {
         if (k < kPreCap && g_hPre) { memcpy(g_hPre + (size_t)k * addr::PAGE, (const void*)pg, addr::PAGE); g_hPreAddr[k] = pg; }
         else g_hPreLost++;
         if (h->upd[i]++ == 0) { h->firstEip[i] = e->ContextRecord->Eip; h->firstFrame[i] = g_frame; }
+        if (h->pages[i].block <= -2 && !g_bigWriterStackN) {     // build 84: who copies into the big block
+            uint32_t* sp = (uint32_t*)e->ContextRecord->Esp;
+            uint32_t* top = (uint32_t*)__readfsdword(4);
+            g_bigWriterStack[g_bigWriterStackN++] = e->ContextRecord->Eip;
+            for (int q = 0; q < 2048 && sp + q < top && g_bigWriterStackN < 12; q++) { uint32_t v = sp[q]; if (v >= 0x401000 && v < 0x65C000) g_bigWriterStack[g_bigWriterStackN++] = v; }
+        }
         h->status[i] = 4;
     } else if (game) {
         h->outside[i]++;
@@ -2768,11 +3280,14 @@ static void HuntArmAll(HSet* h) {
 static void HuntStart() {
     g_hFaults = 0;
     g_hAdded = g_hAddedBlocks = g_hShared = g_hAddLogs = g_hBlockLogs = 0;
+    g_bigPageLogs = g_hBigPages = 0;
+    g_bigWriterStackN = 0; g_bigWriterLogged = false;
     g_hPreN = 0;
     g_hPreLost = 0;
     g_hPreLostTotal = 0;
     g_hWatchHeap = 0;
     if (!g_cfg.hunt) return;
+    double tFind0 = NowMsEarly();
     if (!g_hPre) g_hPre = (uint8_t*)VirtualAlloc(nullptr, (size_t)kPreCap * addr::PAGE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     std::vector<uint8_t> inState(addr::DATA_PAGES, 0), blockIn(g_blocks.size(), 0);
     for (uint32_t ci : g_state) {
@@ -2782,59 +3297,111 @@ static void HuntStart() {
     }
     std::vector<HPage> pages;
     uint32_t dataPages = 0;
+    MEMORY_BASIC_INFORMATION dq{};
+    uint32_t dqLo = 0, dqHi = 0, dqQueries = 0;
     for (uint32_t i = 0; i < addr::DATA_PAGES && i < g_chunks.size(); i++) {
         if (inState[i] || g_chunks[i].block >= 0) continue;
         uint32_t pg = addr::DATA_START + i * addr::PAGE;
         if (pg == addr::PART_PAGE || NeverRestore(pg) || InInputRanges(pg, addr::PAGE)) continue;
-        MEMORY_BASIC_INFORMATION mi{};
-        if (!VirtualQuery((void*)pg, &mi, sizeof mi) || mi.State != MEM_COMMIT) continue;
+        // Build 77: one VirtualQuery per region, not per page (test 76b: 18,000 queries took 3.5 s on the laptop)
+        if (pg < dqLo || pg >= dqHi) {
+            MEMORY_BASIC_INFORMATION q{};
+            dqQueries++;
+            if (!VirtualQuery((void*)pg, &q, sizeof q)) { dqLo = pg; dqHi = pg + addr::PAGE; dq = MEMORY_BASIC_INFORMATION{}; }
+            else { dq = q; dqLo = (uint32_t)q.BaseAddress; dqHi = dqLo + (uint32_t)q.RegionSize; }
+        }
+        const MEMORY_BASIC_INFORMATION& mi = dq;
+        if (mi.State != MEM_COMMIT) continue;
         DWORD p = mi.Protect & 0xFF;
         if (p != PAGE_READWRITE && p != PAGE_WRITECOPY) continue;
         if (mi.Protect & (PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE)) continue;
         pages.push_back({pg, mi.Protect, -1});
         dataPages++;
     }
-    uint32_t heapBlocks = 0;
+    double tData = NowMsEarly() - tFind0;     // build 74: test 73a spent 1.1 s here somewhere
+    uint32_t heapLooked = 0, heapQueried = 0;
+    uint32_t heapBlocks = 0, bigLogs = 0, bigPageBlocks = 0;
+    g_bigChunksIn.clear();
     const uint64_t heapCap = (uint64_t)g_cfg.watchHeapMB << 20;
     if (g_cfg.heap && g_cfg.heapRestore) {
         for (uint32_t b = 0; b < g_blocks.size(); b++) {
             const Block& B = g_blocks[b];
-            if (blockIn[b] || g_blockDead[b] || B.size < (64u << 10) || B.size > (32u << 20)) continue;
+            if (blockIn[b] || g_blockDead[b] || B.size < (64u << 10)) continue;
+            heapLooked++;
             if (!g_own.Has(B.start)) continue;
+            // Build 73: test 72a: a 16.5 MB screen-sized block joined mid-fight (244 ms freeze, state
+            // doubled) although the game writes only about 0.4 of its pages per frame. Big blocks stay out.
+            // Build 83: test 82a: Bisclavret's assist B (Clone Uathach) has the fight logic write 805
+            // pages of a 16.5 MB screen-sized block (by 0x637FD7, a copy) and the replay crashed.
+            // Blocks up to watch_big_block_max_kb are watched page by page: a written page joins the
+            // state alone (with its neighbour chunks), not the whole block.
+            bool pageWise = B.size > (uint32_t)g_cfg.watchBlockMaxKB * 1024u && B.size <= (uint32_t)g_cfg.watchBigMaxKB * 1024u;
+            if (B.size > (uint32_t)g_cfg.watchBlockMaxKB * 1024u && !pageWise) {
+                BigAdd(B.start, B.size);   // build 82
+                if (bigLogs < 8) { bigLogs++; Log("  memory watch: heap block 0x%08X (%u bytes) is bigger than watch_block_max_kb=%d: not watched, left out of the saved state", B.start, B.size, g_cfg.watchBlockMaxKB); }
+                continue;
+            }
             uint32_t lo = (B.start + addr::PAGE - 1) & ~(addr::PAGE - 1), hi = (B.start + B.size) & ~(addr::PAGE - 1);
             if (hi <= lo) continue;
             if (g_hWatchHeap + (hi - lo) > heapCap) continue;
+            heapQueried++;
             MEMORY_BASIC_INFORMATION mi{};
             if (!VirtualQuery((void*)lo, &mi, sizeof mi) || mi.State != MEM_COMMIT) continue;
             DWORD p = mi.Protect & 0xFF;
             if (p != PAGE_READWRITE || (mi.Protect & (PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE))) continue;
             if ((uint32_t)mi.BaseAddress + mi.RegionSize < hi) continue;   // keep it simple: one memory region
-            for (uint32_t pg = lo; pg < hi; pg += addr::PAGE) pages.push_back({pg, mi.Protect, (int32_t)b});
+            for (uint32_t pg = lo; pg < hi; pg += addr::PAGE) pages.push_back({pg, mi.Protect, pageWise ? -2 - (int32_t)b : (int32_t)b});
             g_hWatchHeap += hi - lo;
             heapBlocks++;
+            if (pageWise) { bigPageBlocks++; Log("  memory watch: heap block 0x%08X (%u bytes) watched page by page (written pages join the state)", B.start, B.size); }
         }
     }
+    double tHeap = NowMsEarly() - tFind0 - tData;
+    double tS0 = NowMsEarly();
     std::sort(pages.begin(), pages.end(), [](const HPage& a, const HPage& b) { return a.addr < b.addr; });
     HSet* h = new HSet(pages.size());     // never freed: the handler may still read it
+    Log("  memory watch: finding took %.1f ms for .data (%u pages, %u queries), %.1f ms for the heap (%u blocks of 64 KB+, %u queried), %.1f ms to sort and set up the list",
+        tData, dataPages, dqQueries, tHeap, heapLooked, heapQueried, NowMsEarly() - tS0);
     h->pages = std::move(pages);
     for (size_t i = 0; i < h->pages.size(); i++) { h->armed[i] = 0; h->status[i] = 0; h->upd[i] = 0; h->outside[i] = 0; h->thr[i] = 0; }
     if (!g_hHandler) { AddVectoredExceptionHandler(1, HuntHandler); g_hHandler = true; }
     g_hset = h;
-    DWORD t0 = GetTickCount();
+    double t0 = NowMsEarly();
     HuntArmAll(h);                 // now, before the first save: every saved frame is then covered
     g_hArm = true;
     CreateThread(nullptr, 0, HArmThread, nullptr, 0, nullptr);
-    Log("  memory watch: %u more .data pages and %u heap blocks (%.1f MB) watched; the first write by the game logic adds them (%.0f ms to set up)",
-        dataPages, heapBlocks, g_hWatchHeap / 1048576.0, (double)(GetTickCount() - t0));
+    Log("  memory watch: %u more .data pages and %u heap blocks (%.1f MB, %u pages) watched; the first write by the game logic adds them (%.1f ms to make them read-only, %.1f ms with finding them)",
+        dataPages, heapBlocks, g_hWatchHeap / 1048576.0, (unsigned)h->pages.size(), NowMsEarly() - t0, NowMsEarly() - tFind0);
+    BigArm();                      // build 82
 }
 // Put one chunk into the state; pre = its content in every saved frame.
+// Build 73: collected first and added in one go (StateAppendFlush). Test 72a:
+// adding chunk by chunk grew each of the 8 saved frames over and over (33-112 ms).
+static std::vector<uint8_t> g_appBuf;
+static std::vector<uint32_t> g_appCi;
 static void StateAppend(uint32_t ci, const uint8_t* pre) {
     const Chunk& c = g_chunks[ci];
-    g_state.push_back(ci);
-    g_stateBytes += c.len;
-    for (auto& s : g_ring) s.mem.insert(s.mem.end(), pre, pre + c.len);
-    const uint8_t* live = reinterpret_cast<const uint8_t*>(c.addr);
-    g_truth.mem.insert(g_truth.mem.end(), live, live + c.len);
+    g_appCi.push_back(ci);
+    g_appBuf.insert(g_appBuf.end(), pre, pre + c.len);
+}
+static inline void MemGrow(std::vector<uint8_t>& v, size_t add) {   // room for later additions too
+    size_t need = v.size() + add;
+    if (v.capacity() < need) v.reserve(need + need / 4);
+}
+static void StateAppendFlush() {
+    if (g_appCi.empty()) return;
+    for (auto& sn : g_ring) { MemGrow(sn.mem, g_appBuf.size()); sn.mem.insert(sn.mem.end(), g_appBuf.begin(), g_appBuf.end()); }
+    MemGrow(g_truth.mem, g_appBuf.size());
+    for (uint32_t ci : g_appCi) {
+        const Chunk& c = g_chunks[ci];
+        g_state.push_back(ci);
+        g_stateBytes += c.len;
+        const uint8_t* live = reinterpret_cast<const uint8_t*>(c.addr);
+        g_truth.mem.insert(g_truth.mem.end(), live, live + c.len);
+    }
+    g_appCi.clear();
+    g_appBuf.clear();
+    if (g_appBuf.capacity() > (8u << 20)) { g_appBuf.shrink_to_fit(); }
 }
 // Called between frames on the game thread: adds what the update wrote.
 // The saved frames stay valid, so nothing has to start over.
@@ -2845,6 +3412,8 @@ static bool HuntCollect() {
     uint32_t lost = g_hPreLost.load();
     if (n == 0 && lost == 0) return false;
     if (n > kPreCap) n = kPreCap;
+    double tc0 = NowMsEarly();
+    uint32_t statePosWas = (uint32_t)g_state.size();
     // page -> copy index
     std::vector<std::pair<uint32_t, uint32_t>> pre;
     pre.reserve(n);
@@ -2864,7 +3433,52 @@ static bool HuntCollect() {
     for (size_t i = 0; i < h->pages.size(); i++) {
         if (h->status[i].load() != 4) continue;
         const HPage& P = h->pages[i];
-        if (P.block < 0) {
+        if (P.block <= -2) {            // build 83: one page of a big block
+            int32_t bb = -2 - P.block;
+            HLock();
+            if (h->armed[i]) { DWORD old; VirtualProtect((void*)P.addr, addr::PAGE, P.prot, &old); h->armed[i] = 0; }
+            bool alive = !g_blockDead[bb];
+            h->status[i] = alive ? 1 : 3;
+            HUnlock();
+            if (!alive) continue;
+            const Block& B = g_blocks[bb];
+            if ((uint64_t)(g_stateBytes + g_appBuf.size() + 3 * addr::PAGE) * (g_ring.size() + 2) > (700ull << 20)) {
+                h->status[i] = 3;
+                if (g_bigPageLogs++ < 8) Log("  memory watch: page 0x%08X of big block 0x%08X LEFT OUT: the state would get too big for memory", P.addr, B.start);
+                continue;
+            }
+            uint32_t a0 = std::max(P.addr, B.start), a1 = std::min(P.addr + addr::PAGE, B.start + B.size);
+            uint32_t added = 0;
+            for (uint32_t ci = g_blockFirst[bb] + (a0 - B.start) / addr::PAGE; ci <= g_blockFirst[bb] + (a1 - 1 - B.start) / addr::PAGE; ci++) {
+                if (ci >= g_chunks.size() || g_chunks[ci].block != bb || !g_bigChunksIn.insert(ci).second) continue;
+                const Chunk& c = g_chunks[ci];
+                buf.assign(reinterpret_cast<const uint8_t*>(c.addr), reinterpret_cast<const uint8_t*>(c.addr) + c.len);
+                for (uint32_t pg = c.addr & ~(addr::PAGE - 1); pg < c.addr + c.len; pg += addr::PAGE) {
+                    const uint8_t* src = copyOf(pg);
+                    if (!src) continue;
+                    uint32_t lo = std::max(pg, c.addr), hi = std::min(pg + addr::PAGE, c.addr + c.len);
+                    memcpy(buf.data() + (lo - c.addr), src + (lo - pg), hi - lo);
+                }
+                StateAppend(ci, buf.data());
+                added++;
+            }
+            if (std::find(g_stateBlocks.begin(), g_stateBlocks.end(), (uint32_t)bb) == g_stateBlocks.end()) g_stateBlocks.push_back((uint32_t)bb);
+            g_hBigPages++;
+            addedNow++;
+            if (!g_bigWriterLogged && g_bigWriterStackN) {
+                g_bigWriterLogged = true;
+                char sb[200]; int m = 0;
+                for (uint32_t q = 0; q < g_bigWriterStackN && m < 180; q++) m += snprintf(sb + m, sizeof sb - m, " %08X", g_bigWriterStack[q]);
+                Log("  memory watch: first write into a big block: code and callers:%s", sb);
+            }
+            if (g_bigPageLogs < 12) {
+                g_bigPageLogs++;
+                DescribeAddr(h->firstEip[i], who, sizeof who);
+                Log("  memory watch: added page 0x%08X of big block 0x%08X (%u chunks; first written by %s at frame %u)", P.addr, B.start, added, who, h->firstFrame[i]);
+            }
+            continue;
+        }
+        if (P.block == -1) {
             uint32_t ci = (P.addr - addr::DATA_START) / addr::PAGE;
             const uint8_t* src = copyOf(P.addr);
             if (!src) { src = reinterpret_cast<const uint8_t*>(P.addr); missing++; }
@@ -2873,6 +3487,7 @@ static bool HuntCollect() {
             g_hAdded++;
             addedNow++;
             if (std::find(g_huntKept.begin(), g_huntKept.end(), P.addr) == g_huntKept.end()) g_huntKept.push_back(P.addr);
+            g_mlFightPages.push_back({P.addr, h->firstEip[i]});   // build 81
             if (g_hAddLogs < 60) {
                 g_hAddLogs++;
                 DescribeAddr(h->firstEip[i], who, sizeof who);
@@ -2903,7 +3518,7 @@ static bool HuntCollect() {
         // state; past ~700 MB in total (vectors can briefly need double) the 32-bit game runs out of address
         // space (test 67 crashed that way). Leave the block out and say so:
         // a desync is better than a crash.
-        if ((uint64_t)(g_stateBytes + B.size) * (g_ring.size() + 2) > (700ull << 20)) {
+        if ((uint64_t)(g_stateBytes + g_appBuf.size() + B.size) * (g_ring.size() + 2) > (700ull << 20)) {
             for (size_t q = first; q <= last; q++) if (h->status[q] != 2) h->status[q] = 3;
             DescribeAddr(h->firstEip[i], who, sizeof who);
             Log("  memory watch: heap block 0x%08X (%u bytes, first written by %s at frame %u) LEFT OUT: the state would get too big for memory (%.1f MB now, %u saved frames)",
@@ -2929,6 +3544,7 @@ static bool HuntCollect() {
         }
         g_stateBlocks.push_back((uint32_t)b);
         g_hAddedBlocks++;
+        g_mlFightSizes.push_back({B.size, h->firstEip[i]});      // build 81
         addedNow++;
         if (B.size <= kKeepSizeMax && std::find(g_heapKeptSizes.begin(), g_heapKeptSizes.end(), B.size) == g_heapKeptSizes.end() && g_heapKeptSizes.size() < 64)
             g_heapKeptSizes.push_back(B.size);
@@ -2941,12 +3557,22 @@ static bool HuntCollect() {
         i = last;
     }
     if (locked) HeapUnlock(heap);
+    StateAppendFlush();            // build 73
     for (uint32_t k = 0; k < n; k++) g_hPreAddr[k] = 0;
     g_hPreN = 0;
     g_hPreLost = 0;
     if (lost) g_hPreLostTotal += lost;
     if (missing || lost) Log("  memory watch: %u pages added without their earlier content (%u copies did not fit); a rewind to before frame %u may differ there", missing, lost, g_frame);
     if (truthWas == stateWas) g_truthBytes = g_stateBytes;   // the true state of the last frame grew with it
+    {   // build 72: how long adding memory took (the stalls of tests 59 and 65b)
+        static uint32_t logs = 0;
+        double ms = NowMsEarly() - tc0;
+        if (addedNow && (ms >= 5.0 || logs < 10) && logs < 80) {
+            logs++;
+            Log("  memory watch: frame %u: %u pages written for the first time, %u pieces (%.2f MB) joined the state in %.1f ms; state now %.1f MB x %u saved frames",
+                g_frame, n, (unsigned)(g_state.size() - statePosWas), (g_stateBytes - stateWas) / 1048576.0, ms, g_stateBytes / 1048576.0, (unsigned)g_ring.size());
+        }
+    }
     return addedNow != 0;
 }
 static void HuntStop() {
@@ -2971,10 +3597,11 @@ static void HuntStop() {
     }
     Log("  memory watch: %u .data pages and %u heap blocks added, %u pages written by the game logic and other threads (left out), %u not watched any more, %u faults, %u copies did not fit",
         g_hAdded, g_hAddedBlocks, shared, busy, g_hFaults.load(), g_hPreLostTotal);
+    if (g_hBigPages) Log("  memory watch: %u pages of big blocks added (page by page)", g_hBigPages);
     char line[1200] = "";
     size_t n = 0;
     for (size_t i = 0; i < h->pages.size() && n + 12 < sizeof line; i++)
-        if (h->status[i] == 1 && h->pages[i].block < 0) n += snprintf(line + n, sizeof line - n, " 0x%08X", h->pages[i].addr);
+        if (h->status[i] == 1 && h->pages[i].block == -1) n += snprintf(line + n, sizeof line - n, " 0x%08X", h->pages[i].addr);
     if (n) Log("  memory watch: .data pages added:%s", line);
 }
 
@@ -3084,7 +3711,9 @@ static uint32_t g_rbStart = 0;              // first frame a rewind can go back 
 static uint32_t g_rbConf = 0;               // all frames before this have the remote player's real input
 static uint32_t g_rbLast[2] = {0, 0};       // remote player's newest real input (the guess for later frames)
 static int g_rbRemote = 0;                  // 0 = player 1, 1 = player 2
-static uint32_t g_rbWrong = RB_NONE;        // earliest frame whose guess turned out wrong
+static uint32_t g_rbWrong = RB_NONE;
+static bool g_rbFrozen = false;          // build 74: fight result phase reached: no more rollbacks / checks
+static uint32_t g_rbFrozenIgnored = 0;        // earliest frame whose guess turned out wrong
 struct FakePkt { uint32_t frame = RB_NONE, arrive = 0, v[2] = {0, 0}; bool delivered = false; };
 struct ConfIn { uint32_t frame = RB_NONE, v[2] = {0, 0}; };
 static FakePkt g_fq[256];
@@ -3304,6 +3933,7 @@ static void LogTimings(const char* when) {
         g_tReplay.max, g_tUpdate.n ? g_tUpdate.sum / g_tUpdate.n : 0.0, g_tSave.n);
 }
 
+#include "perf.inc"
 static void RbResetStats();
 static void RbLogStats(const char* when);
 // ---------------------------------------------------------------------------
@@ -3356,8 +3986,19 @@ static LONG CALLBACK HwHandler(EXCEPTION_POINTERS* e) {
     c->Dr6 = 0;
     return EXCEPTION_CONTINUE_EXECUTION;
 }
+static bool g_hwCustom = false;
+static void HwStartAddrs() {          // build 84: the addresses from hw_watch
+    if (!OnGameThread() || g_hwOn || !g_cfg.hwWatch[0]) return;
+    for (int i = 0; i < 3; i++) g_hwAddr[i] = g_cfg.hwWatch[i] ? g_cfg.hwWatch[i] : g_cfg.hwWatch[0];
+    if (!g_hwHandler) { AddVectoredExceptionHandler(1, HwHandler); g_hwHandler = true; }
+    g_hwN = 0; g_hwTotal = 0;
+    g_hwOn = true; g_hwCustom = true;
+    RaiseException(HW_SET, 0, 0, nullptr);
+    Log("  CPU write watch on 0x%08X 0x%08X 0x%08X (hw_watch)", g_hwAddr[0], g_hwAddr[1], g_hwAddr[2]);
+}
 static void HwStart() {
     if (!OnGameThread()) return;
+    g_hwCustom = false;
     uint32_t blk = 0;
     for (uint32_t b : g_stateBlocks) if (g_blocks[b].size == 3270964) blk = g_blocks[b].start;
     if (!blk) { Log("  write watch: fight pool block not found"); return; }
@@ -3368,15 +4009,22 @@ static void HwStart() {
     RaiseException(HW_SET, 0, 0, nullptr);
     Log("  write watch on 0x%08X 0x%08X 0x%08X (fight pool +0x208 +0x220 +0x228)", g_hwAddr[0], g_hwAddr[1], g_hwAddr[2]);
 }
+static void HwReport(const char* why);
 static void HwStop() {
     if (!g_hwOn || !OnGameThread()) return;
     RaiseException(HW_CLEAR, 0, 0, nullptr);
     g_hwOn = false;
-    Log("  write watch: %u writes", g_hwTotal);
+    HwReport("fight end");
+}
+static void HwReport(const char* why) {
+    if (!g_hwN && !g_hwTotal) return;
+    Log("  write watch (%s): %u writes", why, g_hwTotal);
     for (uint32_t k = 0; k < g_hwN; k++) {
         const HwHit& h = g_hw[k];
         char line[256];
-        int n = snprintf(line, sizeof line, "    +0x%X written before %08X x%u (nonzero: %u in first runs, %u in replays; last %08X) |", (h.field == 0 ? 0x208u : h.field == 1 ? 0x220u : 0x228u), h.eip, h.count, h.nzFirst, h.nzReplay, h.lastVal);
+        int n = g_hwCustom
+            ? snprintf(line, sizeof line, "    0x%08X written before %08X x%u (nonzero: %u in first runs, %u in replays; last %08X) |", g_hwAddr[h.field], h.eip, h.count, h.nzFirst, h.nzReplay, h.lastVal)
+            : snprintf(line, sizeof line, "    +0x%X written before %08X x%u (nonzero: %u in first runs, %u in replays; last %08X) |", (h.field == 0 ? 0x208u : h.field == 1 ? 0x220u : 0x228u), h.eip, h.count, h.nzFirst, h.nzReplay, h.lastVal);
         for (int i = 0; i < 10 && h.stack[i]; i++) n += snprintf(line + n, sizeof line - n, " %08X", h.stack[i]);
         Log("%s", line);
     }
@@ -3448,7 +4096,20 @@ static void BuildFixedState() {
         carried ? ", some left to the new-block tracking" : "", g_stateBytes / 1048576.0);
 }
 
+static void BuildPtrMap(bool now);
+static bool NetOn();
 static bool SyncTestStart() {
+    if (NetOn()) TimersAtFightStart();   // build 80: before the state is first saved
+    RandTraceReset();
+    g_ownSeedFightCalls = 0;
+    g_ownSeed = 0x0BADF00Du;
+    MemListLoad();                    // build 81 (first fight of the session)
+    MemListFightStart();
+    double tp = NowMs(), tp0 = tp;           // build 72: fight-start timeline
+    auto phase = [&](const char* what) { double n = NowMs(); Log("  fight start: %s took %.1f ms", what, n - tp); tp = n; };
+    HevInit();
+    g_hevN = 0;
+    g_dtBuilds = 0;
     g_auditFirst = 120;
     DtDisarm();
     dt::faults = dt::arms = dt::copied = dt::saves = dt::audits = dt::missed = dt::restores = dt::rcopied = dt::protFails = 0;
@@ -3456,8 +4117,11 @@ static bool SyncTestStart() {
     uint32_t contested = 0, never = 0, dead = 0, threaded = 0, threadBlocks = 0;
     bool haveW = false;
     if (!g_cfg.useProfile) {
+        phase("stopping old tracking");
         BuildChunks();
+        phase("listing game memory (heap walk)");
         BuildFixedState();
+        phase("fixed memory list");
     } else {
     if (!g_haveProfile) {
         Log("SYNC TEST needs a profile from this game session first: press F9 during a fight.");
@@ -3558,7 +4222,8 @@ static bool SyncTestStart() {
     }
     g_jActive = true;
     g_allocMiss = g_reallocs = g_released = 0;
-    for (auto& s : g_ring) { s.mem.resize(g_stateBytes); s.input.resize(inputBytes); }
+    for (auto& s : g_ring) { s.mem.reserve(g_stateBytes + g_stateBytes / 4); s.mem.resize(g_stateBytes); s.input.resize(inputBytes); }   // build 73: room to grow
+    g_truth.mem.reserve(g_stateBytes + g_stateBytes / 4);
     g_truth.mem.resize(g_stateBytes);
     g_truth.input.resize(inputBytes);
     g_ringCount = 0;
@@ -3583,6 +4248,8 @@ static bool SyncTestStart() {
     g_jAll = &g_journals;
     g_rbOn = g_rbWant;
     if (g_rbOn) {
+        g_rbFrozen = false;
+        g_rbFrozenIgnored = 0;
         g_rbStarted = false;
         g_rbWrong = RB_NONE;
         g_rbLast[0] = g_rbLast[1] = 0;
@@ -3596,7 +4263,12 @@ static bool SyncTestStart() {
         else Log("ROLLBACK TEST start: player %d's input arrives %d frames late (+0..%d random, %d%% extra late), rewinds up to %d frames, check every %d frames",
             g_cfg.fakeRemote, g_cfg.fakeLag, g_cfg.fakeJitter, g_cfg.fakeLoss, g_cfg.depth, g_cfg.verifyEvery);
     }
+    phase("saved-frame buffers");
     HuntStart();     // build 49: also during rollback (the saved frames stay valid when memory is added)
+    phase("memory watch set-up");
+    Log("  fight start: %.1f ms in total before the first frame (state %.1f MB x %u saved frames)", NowMs() - tp0, g_stateBytes / 1048576.0, (unsigned)g_ring.size());
+    perf::ticksAtStart = dt::tick;
+    perf::pageWrites.clear();
     if (g_cfg.useProfile)
         Log("SYNC TEST start: depth %d, %u chunks (%.2f MB per snapshot, %u heap blocks). Left out: %u never-restore, %u contested, %u freed, %u written by other threads (%u heap blocks partly used by other threads or by non-game code)%s",
             g_cfg.depth, (unsigned)g_state.size(), g_stateBytes / 1048576.0, (unsigned)g_stateBlocks.size(), never, contested, dead,
@@ -3605,6 +4277,7 @@ static bool SyncTestStart() {
         Log("SYNC TEST start: depth %d, %u chunks (%.2f MB per snapshot at the start, %u heap blocks); more is added when the game writes it",
             g_cfg.depth, (unsigned)g_state.size(), g_stateBytes / 1048576.0, (unsigned)g_stateBlocks.size());
     if (g_cfg.dirtyTracking < 0) HwStart();   // build 38: write watch off (it worked: see test 37)
+    else HwStartAddrs();                       // build 84
     return true;
 }
 
@@ -3612,13 +4285,20 @@ static void SyncTestStop(const char* why) {
     Log("SYNC TEST stop (%s): %u frames tested, %u desynced, %u frames skipped, %u clock values missing in replay",
         why, g_testFrames, g_desyncs, g_skips, g_clockMiss);
     LogApiSites("Calls made by the game logic during update (sync test, includes replays)", g_testFrames);
+    if (g_cfg.ownSeedN) Log("  own seed: %u rand calls this fight came from PC-dependent code (own seed)", g_ownSeedFightCalls);
+    if (NetOn()) RandTraceDump("fight end");
     g_mode = Mode::Idle;
     HwStop();
     if (g_rbOn) RbLogStats("end");
+    if (g_rbOn && g_rbFrozen) Log("  rollback: off from the fight's result phase on; %u late input corrections ignored there", g_rbFrozenIgnored);
     DtLogStats();
+    PerfCostReport();      // build 72
     DtDisarm();
     g_rbOn = false;
     HuntStop();
+    BigReport("fight end");          // build 82
+    BigDisarm();
+    MemListSave();                    // build 81/82
     ClockReal();
     g_jmode = JMode::Off;
     g_jActive = false;
@@ -3627,6 +4307,8 @@ static void SyncTestStop(const char* why) {
         g_jOutside = nullptr;
     }
     for (auto& j : g_journals) ReleaseFrees(j);    // the game did free these; do it for real now
+    HeldRelease(0, true);                          // build 75
+    HeldLogStats();
     {
         JLock lock;               // files: the delayed closes are done; stop tracking the rest
         g_fileDyn.clear();
@@ -3673,12 +4355,14 @@ static uint32_t SyncTestFrame(void* scene) {
     }
 
     if (!g_cueVt) HookCues();
-    if (HuntCollect()) DtEnsure();   // build 49: memory the game wrote for the first time joins the state (saved frames stay valid)
+    bool grew; { PerfScope ps(perf::P_COLLECT); grew = HuntCollect(); }
+    if (grew) { perf::cur.added = 1; PerfScope ps(perf::P_ENSURE); DtEnsure(); }   // build 49: memory the game wrote for the first time joins the state (saved frames stay valid)
                                      // build 53: and the changed-memory tracking grows with it (test 52 crash)
     // 0) Memory the game freed D frames ago can't be reached by a rewind any
     //    more: free it for real now. This slot is reused for this frame.
     g_stage = 1;
     ReleaseFrees(g_journals[slot]);
+    if (g_frame >= (uint32_t)D) HeldRelease(g_frame - D, false);   // build 75
     {
         JLock lock;
         g_jOutside = &g_journals[slot];   // frees after this frame's update land here too
@@ -3691,6 +4375,7 @@ static uint32_t SyncTestFrame(void* scene) {
     if (D > 1) MakeOutDelta(g_ring[slot]);
     CopyState(g_ring[slot], true);
     g_tSave.Add(NowMs() - t0);
+    PerfAdd(perf::P_SAVE, NowMs() - t0);
     {
         Snapshot& sn = g_ring[slot];
         sn.inOk = g_pend.valid && g_pend.frame == g_frame;
@@ -3826,19 +4511,24 @@ static uint32_t g_rbVerifies = 0, g_rbVerifyBad = 0, g_rbOldFreed = 0, g_rbOldCu
 static uint32_t g_rbDepthHist[9];
 static uint32_t g_rbDetailLogs = 0;
 static Timing g_tRb, g_tVerify;
+static double g_verifyPerFrameMs = 0;
+static uint64_t g_verifyDepthSum = 0;
+static uint32_t g_verifyShort = 0;
 static void RbResetStats() {
     g_rbRollbacks = g_rbResim = g_rbMaxDepth = g_rbStalls = g_rbLate = 0;
     g_rbVerifies = g_rbVerifyBad = g_rbOldFreed = g_rbOldCues = g_rbOldFiles = g_rbFrames = 0;
     g_rbDetailLogs = 0;
     memset(g_rbDepthHist, 0, sizeof g_rbDepthHist);
     g_tRb = Timing(); g_tVerify = Timing();
+    g_verifyDepthSum = 0; g_verifyShort = 0;   // build 88 (the per-frame cost estimate carries over)
 }
 static void RbLogStats(const char* when) {
     Log("ROLLBACK TEST %s: %u frames, %u rollbacks (%u frames re-run, deepest %u), %u guesses right, %u wrong, %u waits, %u inputs too late to fix",
         when, g_rbFrames, g_rbRollbacks, g_rbResim, g_rbMaxDepth, g_rbGuessRight, g_rbGuessWrong, g_rbStalls, g_rbLate);
     Log("  rollback depth: 1:%u 2:%u 3:%u 4:%u 5:%u 6:%u 7:%u 8:%u", g_rbDepthHist[1], g_rbDepthHist[2], g_rbDepthHist[3],
         g_rbDepthHist[4], g_rbDepthHist[5], g_rbDepthHist[6], g_rbDepthHist[7], g_rbDepthHist[8]);
-    Log("  checks: %u (rewind %d frames and replay with the final inputs), %u did NOT match", g_rbVerifies, g_cfg.depth, g_rbVerifyBad);
+    Log("  checks: %u (rewind up to %d frames and replay with the final inputs), %u did NOT match; average %.1f frames replayed, %u shortened to fit verify_budget_ms=%d (%.2f ms per replayed frame)",
+        g_rbVerifies, g_cfg.depth, g_rbVerifyBad, g_rbVerifies ? (double)g_verifyDepthSum / g_rbVerifies : 0.0, g_verifyShort, g_cfg.verifyBudgetMs, g_verifyPerFrameMs);
     Log("  released from abandoned runs: %u heap blocks, %u sound cues, %u files", g_rbOldFreed, g_rbOldCues, g_rbOldFiles);
     Log("  timing: rollback %.2f ms avg / %.2f max (%u); check %.2f ms avg / %.2f max; save %.2f ms avg; update %.2f ms avg",
         g_tRb.n ? g_tRb.sum / g_tRb.n : 0.0, g_tRb.max, g_tRb.n, g_tVerify.n ? g_tVerify.sum / g_tVerify.n : 0.0, g_tVerify.max,
@@ -3903,10 +4593,12 @@ static void RbAttachInput(Snapshot& sn, uint32_t F) {
 static uint32_t RbRecordUpdate(void* scene, Snapshot& sn, Journal& j) {
     ClockRecord(&sn.clock);
     NetFpCapture(sn.frameNo);
+    RandTraceBegin(sn.frameNo);
     g_jcur = &j;
     g_jmode = JMode::Record;
     double tu = NowMs();
     uint32_t r = RunUpdate(scene);
+    RandTraceEnd();
     g_tUpdate.Add(NowMs() - tu);
     g_jmode = JMode::Off;
     ClockReal();
@@ -3922,6 +4614,7 @@ static void RbReleaseOld(Journal& old) {
         if (g_jAll)
             for (auto& j : *g_jAll) { auto& f = j.frees; f.erase(std::remove(f.begin(), f.end(), a.ptr), f.end()); }
         g_own.Erase(a.ptr);
+        HevAdd(HEV_FREE_ABANDONED, a.ptr, a.size, a.caller);
         o_HeapFree(heap, 0, (LPVOID)a.ptr);
         g_rbOldFreed++;
     }
@@ -3955,6 +4648,7 @@ static uint32_t RbRollback(void* scene, uint32_t w, uint32_t F) {
         for (uint32_t k = w; k < F; k++)
             for (uint32_t cd : g_journals[k % D].cueDestroys) VecDel(g_cuePending, cd);
     }
+    HeldDropFrom(w);           // build 75: frees the abandoned run made from frame w on
     CopyState(g_ring[w % D], false);
     std::vector<uint8_t> padNow;
     uint32_t r = 0;
@@ -3996,7 +4690,11 @@ static uint32_t RbRollback(void* scene, uint32_t w, uint32_t F) {
         g_jIdx = 0;
         g_jmode = JMode::Resim;
         NetFpCapture(k);
+        RandTraceBegin(k);
+        g_resimFrame = k;
         RunUpdate(scene);
+        g_resimFrame = 0;
+        RandTraceEnd();
         g_jmode = JMode::Off;
         ClockReal();
         g_jold = nullptr;
@@ -4081,9 +4779,21 @@ static void RbVerifyDetail(void* scene, uint32_t F) {
     CopyState(g_truth, false);
     FilePositionsRestore();
 }
-static void RbVerify(void* scene, uint32_t F) {
+// Build 88 (cheaper check): the check replays the last `d` frames (d <= depth). Its cost
+// per replayed frame is measured, and d is picked so a check fits in verify_budget_ms,
+// so test runs on a slower PC are not slowed down by the test itself.
+static int VerifyDepth() {
     const int D = g_cfg.depth;
-    uint32_t first = F - (D - 1);
+    if (g_cfg.verifyBudgetMs <= 0 || g_verifyPerFrameMs <= 0) return D;
+    int d = (int)(g_cfg.verifyBudgetMs / g_verifyPerFrameMs);
+    if (d < 2) d = 2;
+    if (d > D) d = D;
+    return d;
+}
+static void RbVerify(void* scene, uint32_t F, int d) {
+    const int D = g_cfg.depth;
+    if (d < 1 || d > D) d = D;
+    uint32_t first = F - (d - 1);
     for (uint32_t k = first; k <= F; k++) {
         const Snapshot& sn = g_ring[k % D];
         if (sn.frameNo != k || !sn.inOk) return;
@@ -4125,10 +4835,23 @@ static void RbVerify(void* scene, uint32_t F) {
     if (!same) { g_rbVerifyBad++; g_desyncs++; ReportDiff(F); }
     CopyState(g_truth, false);
     FilePositionsRestore();
-    g_tVerify.Add(NowMs() - t);
+    double tv = NowMs() - t;
+    g_tVerify.Add(tv);
+    {   // build 88
+        double per = tv / d;
+        g_verifyPerFrameMs = g_verifyPerFrameMs <= 0 ? per : g_verifyPerFrameMs * 0.9 + per * 0.1;
+        g_verifyDepthSum += (uint32_t)d;
+        if (d < D) g_verifyShort++;
+    }
     if (!same && g_rbDetailLogs < 6) { g_rbDetailLogs++; RbVerifyDetail(scene, F); }
 }
 
+// Build 74 (test 73a crash): once the fight's result phase starts (phase 7: the
+// "Request rematch?" box, which our boot code answers and ends), a rewind must not
+// re-run those frames: the box answers and the end flag are written by us, outside
+// the game's input, so a re-run goes another way (desync, then a crash at 0x5CF8A9).
+// From then on no checks and no rollbacks; the few frames left before the fight
+// screen closes keep the inputs they got.
 static uint32_t RollbackFrame(void* scene) {
     const int D = g_cfg.depth;
     uint32_t F = g_frame;
@@ -4139,7 +4862,8 @@ static uint32_t RollbackFrame(void* scene) {
         return RunUpdate(scene);
     }
     if (!g_cueVt) HookCues();
-    if (HuntCollect()) DtEnsure();   // build 49; build 53: tracking grows with the state (test 52 crash)
+    bool grew; { PerfScope ps(perf::P_COLLECT); grew = HuntCollect(); }
+    if (grew) { perf::cur.added = 1; PerfScope ps(perf::P_ENSURE); DtEnsure(); }   // build 49; build 53: tracking grows with the state (test 52 crash)
     if (NetOn()) NetFeedRb();
     RbDeliver(F);
     // Too late: saving frame F overwrites frame F-D, so a rollback from here
@@ -4155,6 +4879,7 @@ static uint32_t RollbackFrame(void* scene) {
     }
     g_stage = 1;
     ReleaseFrees(g_journals[slot]);
+    if (F >= (uint32_t)D) HeldRelease(F - D, false);   // build 75
     {
         JLock lock;
         g_jOutside = &g_journals[slot];
@@ -4164,6 +4889,7 @@ static uint32_t RollbackFrame(void* scene) {
     MakeOutDelta(g_ring[slot]);
     CopyState(g_ring[slot], true);
     g_tSave.Add(NowMs() - t0);
+    PerfAdd(perf::P_SAVE, NowMs() - t0);
     RbAttachInput(g_ring[slot], F);
     Snapshot& sn = g_ring[slot];
     if (!sn.inOk && g_rbStarted) {
@@ -4181,6 +4907,9 @@ static uint32_t RollbackFrame(void* scene) {
     }
     uint32_t w = g_rbWrong;
     g_rbWrong = RB_NONE;
+    if (g_rbFrozen && w != RB_NONE) { w = RB_NONE; g_rbFrozenIgnored++; }
+    {
+    PerfScope ps(perf::P_STEP);
     if (started && w != RB_NONE) {
         if (w + (uint32_t)D <= F) { g_rbLate++; w = F - (D - 1); }
         if (w < g_rbStart) w = g_rbStart;
@@ -4188,8 +4917,9 @@ static uint32_t RollbackFrame(void* scene) {
     } else {
         r = RbRecordUpdate(scene, sn, g_journals[slot]);
     }
+    }
     g_stage = 4;
-    CopyState(g_truth, true);
+    { PerfScope ps(perf::P_TRUTH); CopyState(g_truth, true); }
     g_truthFrame = F;
     g_truthBytes = g_stateBytes;
     g_rbFrames++;
@@ -4201,7 +4931,7 @@ static uint32_t RollbackFrame(void* scene) {
         return r;
     }
     int verifyEvery = NetOn() ? g_cfg.onlineVerifyEvery : g_cfg.verifyEvery;
-    if (verifyEvery > 0 && F >= g_rbStart + (uint32_t)D && F % (uint32_t)verifyEvery == 0) RbVerify(scene, F);
+    if (!g_rbFrozen && verifyEvery > 0 && F >= g_rbStart + (uint32_t)D && F % (uint32_t)verifyEvery == 0) { PerfScope ps(perf::P_VERIFY); RbVerify(scene, F, VerifyDepth()); }
     g_stage = 0;
     if (g_rbFrames % 600 == 0) RbLogStats("so far");
     if (NetOn())
@@ -4374,6 +5104,8 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
         g_gameTid = GetCurrentThreadId();
         Log("game thread id %lu", g_gameTid);
     }
+    PerfFrameBegin();                       // build 72
+    struct PerfEnd { ~PerfEnd() { PerfFrameEnd(); } } perfEnd;
     uint32_t vt = scene ? *reinterpret_cast<uint32_t*>(scene) : 0;
     if (vt != g_lastSceneVt) {
         Log("scene: %s (vtable 0x%08X)", addr::SceneName(vt), vt);
@@ -4442,9 +5174,39 @@ static uint32_t __attribute__((thiscall)) HookUpdateOverlay(void* scene) {
     return OrigSceneUpdate(scene);
 }
 
+#include "crashdiag.inc"
 // ---------------------------------------------------------------------------
 // Crash logging: if the game crashes, note where (helps me fix it).
 // ---------------------------------------------------------------------------
+// Build 84: at a crash, save the game code around the crash point and the code
+// addresses on the stack (and the first big-block writer's callers) to
+// rollback_crashcode.bin next to the DLL, for reading the code afterwards.
+static void CrashCodeDump(CONTEXT* c) {
+    uint32_t want[40]; int n = 0;
+    want[n++] = c->Eip;
+    uint32_t* sp = reinterpret_cast<uint32_t*>(c->Esp);
+    for (int i = 0; i < 512 && n < 24; i++) {
+        uint32_t v;
+        if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, 4, nullptr)) break;
+        if (v >= 0x401000 && v < 0x65C000) want[n++] = v;
+    }
+    for (uint32_t q = 0; q < g_bigWriterStackN && n < 40; q++) want[n++] = g_bigWriterStack[q];
+    wchar_t path[MAX_PATH];
+    _snwprintf(path, MAX_PATH, L"%lsrollback_crashcode.bin", util::ModDir());
+    FILE* f = _wfopen(path, L"wb");
+    if (!f) return;
+    uint32_t done[40]; int nd = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t base = (want[i] & ~0x7FFu) - 0x800;
+        bool seen = false;
+        for (int k = 0; k < nd; k++) if (done[k] == base) seen = true;
+        if (seen) continue;
+        done[nd++] = base;
+        CodeDumpRange(f, base, 0x1800);
+    }
+    fclose(f);
+    Log("    crash: wrote rollback_crashcode.bin (code around the crash point and %d callers)", nd - 1);
+}
 static LONG CALLBACK CrashLogger(EXCEPTION_POINTERS* e) {
     DWORD code = e->ExceptionRecord->ExceptionCode;
     // Serious errors (0xC...), e.g. access violation, heap corruption.
@@ -4478,6 +5240,8 @@ static LONG CALLBACK CrashLogger(EXCEPTION_POINTERS* e) {
                 if (v >= 0x401000 && v < 0x65C000) { sprintf(buf + strlen(buf), " %08X", v); n++; }
             }
             Log("    stack code addresses:%s", buf);
+            if (logged.load() == 1) CrashCodeDump(c);   // build 84
+            if (logged.load() == 1 && code == EXCEPTION_ACCESS_VIOLATION) CrashDiag(e);   // build 72
         }
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -4536,6 +5300,63 @@ static DWORD WINAPI WatchdogThread(LPVOID) {
         ResumeThread(th);
         CloseHandle(th);
     }
+}
+
+// Build 88: start-up sampler. Test 81a on, the game took 11-16 s (was 1.4 s) from our hooks
+// to its renderer. Every second until the renderer exists (at most 40 s), note where the
+// game's first thread is, so the log shows what the start-up waits on.
+static DWORD WINAPI BootSampleThread(LPVOID) {
+    DWORD pid = GetCurrentProcessId(), tid = 0;
+    ULONGLONG best = ~0ull;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 te{}; te.dwSize = sizeof te;
+        for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+            if (te.th32OwnerProcessID != pid || te.th32ThreadID == GetCurrentThreadId()) continue;
+            HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+            if (!h) continue;
+            FILETIME c, e, k, u;
+            if (GetThreadTimes(h, &c, &e, &k, &u)) {
+                ULONGLONG t = ((ULONGLONG)c.dwHighDateTime << 32) | c.dwLowDateTime;
+                if (t < best) { best = t; tid = te.th32ThreadID; }
+            }
+            CloseHandle(h);
+        }
+        CloseHandle(snap);
+    }
+    if (!tid) { Log("boot timer: could not find the game's first thread"); return 0; }
+    double t0 = NowMs();
+    for (int s = 1; s <= 40; s++) {
+        Sleep(1000);
+        if (g_dev) { Log("boot timer: renderer ready after %.1f s", (NowMs() - t0) / 1000.0); return 0; }
+        HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, tid);
+        if (!th) { Log("boot timer: game thread gone"); return 0; }
+        char line[700]; int n = 0;
+        if (SuspendThread(th) != (DWORD)-1) {
+            CONTEXT c{}; c.ContextFlags = CONTEXT_FULL;
+            if (GetThreadContext(th, &c)) {
+                char where[160];
+                DescribeAddr(c.Eip, where, sizeof where);
+                n = snprintf(line, sizeof line, "boot timer: %d s, game thread at %s |", s, where);
+                uint32_t* sp = reinterpret_cast<uint32_t*>(c.Esp);
+                int m = 0;
+                for (int i = 0; i < 2048 && m < 6 && n < (int)sizeof line - 60; i++) {
+                    uint32_t v;
+                    if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, 4, nullptr)) break;
+                    HMODULE mod = nullptr;
+                    if (v > 0x10000 && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)v, &mod) && mod) {
+                        DescribeAddr(v, where, sizeof where);
+                        n += snprintf(line + n, sizeof line - n, " %s", where);
+                        m++;
+                    }
+                }
+            }
+            ResumeThread(th);
+        }
+        CloseHandle(th);
+        if (n) Log("%s", line);
+    }
+    return 0;
 }
 
 static DWORD WINAPI TitleThread(LPVOID) {
@@ -4662,6 +5483,7 @@ static bool Install() {
     o_CreateFileW = (CreateFileW_t)util::SwapIat(addr::IAT_CreateFileW, (void*)S_CreateFileW);
     o_CreateFileA = (CreateFileA_t)util::SwapIat(addr::IAT_CreateFileA, (void*)S_CreateFileA);
     o_CloseHandle = (CloseHandle_t)util::SwapIat(addr::IAT_CloseHandle, (void*)S_CloseHandle);
+    HookVirtualMemory();      // build 75
     bool ok = (g_wt_Rand = (void*)ModRand, util::WriteRel32(addr::FN_RAND, 0xE9, (void*)S_Rand)) &&
               util::WriteRel32(addr::FN_SRAND, 0xE9, (void*)ModSrand) &&
               util::WriteRel32(addr::CALL_UPDATE_OVERLAY, 0xE8, (void*)HookUpdateOverlay) &&
@@ -4672,7 +5494,7 @@ static bool Install() {
               util::WriteRel32(addr::FN_HIT_CHECK, 0xE9, (void*)S_HitCheckEntry) &&
               util::WriteRel32(addr::CALL_INTRO_PICK, 0xE8, (void*)H_IntroPick) &&
               util::WriteRel32(addr::CALL_CHILD_UPDATE, 0xE8, (void*)H_ChildUpdate) &&
-              HookSaveWrite();
+              HookSaveWrite() && HookTimers();
     if (ok) boot::Install();         // build 61 (optional: the rest works without it)
     Log(ok ? "Hooks installed. Hotkeys: F9 profile, F10 sync test, F11 depth, F8 automatic full test, F7 rollback test with fake lag, F4 connect / disconnect (online), F5 pick a Steam friend." : "Failed to install hooks!");
     SetStatus(ok ? "ready (F9 profile, F10 sync test, F11 depth)" : "hook install failed");
@@ -4703,6 +5525,7 @@ static DWORD WINAPI StartThread(LPVOID) {
     if (Install()) {
         CreateThread(nullptr, 0, TitleThread, nullptr, 0, nullptr);
         CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
+        CreateThread(nullptr, 0, BootSampleThread, nullptr, 0, nullptr);   // build 88
     }
     return 0;
 }
