@@ -276,6 +276,10 @@ static void Tick() {
             static uint32_t lastPhase = 0xFFFFFFFF, lastState = 0xFFFFFFFF;
             if (stateFrames == 1) { lastPhase = lastState = 0xFFFFFFFF; boxSkips = 0; }
             uint32_t ph = U32(FIGHT_PHASE), fs = U32(FIGHT_STATE);
+            if (ph >= 7 && ph < 0x100 && !g_rbFrozen && g_mode == Mode::SyncTest && g_rbOn) {   // build 74
+                g_rbFrozen = true;
+                Log("boot: fight frame %u: result phase %d: no more rollbacks or checks in this fight", stateFrames, (int)ph);
+            }
             if (ph != lastPhase || fs != lastState) {
                 Log("boot: fight frame %u: phase %d, state %d (box answers given: %d)", stateFrames, (int)ph, (int)fs, boxSkips);
                 lastPhase = ph;
@@ -292,6 +296,22 @@ static void Tick() {
                 done = 1;
                 static int logs = 0;
                 if (logs++ < 20) Log("boot: fight frame %u: result is in, ending the fight screen", stateFrames);
+            }
+        }
+        // Build 78 (test 76b): after a desync the laptop's fight never ended while the desktop's
+        // did, so its overlay never came back. When the other PC has finished this match and
+        // ours is still fighting 10 s later, end our fight screen too (no more rollbacks).
+        {
+            static uint32_t otherDoneAt = 0;
+            if (stateFrames == 1) otherDoneAt = 0;
+            if (NetOn() && LB.haveThem && LB.them.phase == LP_POST && LB.them.matchNo == LB.me.matchNo && vt == SCENE_BTL && ptr) {
+                if (!otherDoneAt) otherDoneAt = stateFrames;
+                else if (stateFrames - otherDoneAt == 600) {
+                    if (g_mode == Mode::SyncTest && g_rbOn) g_rbFrozen = true;
+                    *reinterpret_cast<uint8_t*>(ptr + 0x28) = 1;
+                    Log("boot: fight frame %u: the other PC finished this match 10 s ago but this fight is still on (out of sync?); ending the fight screen", stateFrames);
+                    LbNote("the other PC's fight ended; ending this one too");
+                }
             }
         }
         if (vt != SCENE_BTL && vt) {

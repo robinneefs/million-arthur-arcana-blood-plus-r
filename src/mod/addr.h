@@ -67,7 +67,13 @@ constexpr uint32_t PART_PAGE = 0x051EA000;
 //     managers (at +0x7B64 and +0x7B78, set up at 0x46E170) with a 552244-byte
 //     pool of 0x104 x 0x84C objects each (pointer = block + 4). Test 44: a
 //     fight had only one of the four in the state and desynced.
-constexpr uint32_t POOL_PTRS[] = {0x04DCAD80, 0x051E50A8,
+//   0x04DCADB4 (build 86): the super/cut-in owner pool, 40 x 0x20 nodes in a
+//     0x504-byte block (new[] at 0x5EE98F, pointer = block + 4), list head
+//     0x04DCADB8, free list 0x04DCADBC. Too small for the memory watch (64 KB+
+//     blocks only), so a rollback rewound the list heads but not the nodes:
+//     Clone Uathach's cut-in then walked a freed node with owner NULL and
+//     crashed at 0x4B7233 (tests 82a-85a).
+constexpr uint32_t POOL_PTRS[] = {0x04DCAD80, 0x051E50A8, 0x04DCADB4,
                                   0x05130CD8 + 0x7B68, 0x05130CD8 + 0x7B7C,
                                   0x05130CD8 + 0xA520 + 0x7B68, 0x05130CD8 + 0xA520 + 0x7B7C};
 constexpr Range PART_RANGE = {0x051EAC14, 0x051EAD70};

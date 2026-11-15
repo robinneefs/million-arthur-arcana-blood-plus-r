@@ -4,16 +4,17 @@ A mod that adds rollback netcode to the Steam version of Million Arthur: Arcana 
 
 ## Status
 
-**Work in progress, not ready to play yet.**
+**Work in progress, not ready for general use yet.**
 
-- Done: saving and restoring the game state every frame, sync tests, rollback with fake lag, online play between two PCs on a home network, our own match setup overlay (lobby, controls, character, colour, assist and stage select). Start in the overlay boots both PCs straight into the fight, and after the fight both players get our Rematch / Back to lobby screen.
-- Next: real names for characters, colours, assists and stages, smoother play on slower PCs, Steam friend matches, a nicer select screen.
+- Done: saving and restoring the game state every frame, rollback, our own match setup overlay (lobby, controls, character, colour, assist and stage select with real names), booting straight into the fight and back to our Rematch / Back to lobby screen. Online play over Steam works: the first test between two players over the internet (8 fights) had no desyncs and felt close to offline play.
+- Next: a clearer connect flow and messages (for example when the other player leaves), release logging, a nicer select screen. The boss character stays hidden for now.
 
 ## Using it
 
 1. Put `arcana_launcher.exe`, `arcana_rollback.dll` and `rollback.ini` in one folder, anywhere outside the game folder.
 2. Start `arcana_launcher.exe`. It finds the game through Steam, starts it, and loads the mod.
-3. The overlay opens on the main menu. F1 shows or hides it.
+3. The overlay opens on the main menu. F1 shows or hides it. Choose "Steam friend", refresh the list, pick your friend and connect.
+4. The mod writes `rollback_log.txt` next to itself (the previous session's log is kept as `rollback_log_previous.txt`). If something goes wrong, those files help find the cause.
 
 Only the Steam version the mod was made for is supported. If the game version differs, the mod logs this and stays off.
 
