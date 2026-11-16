@@ -19,7 +19,7 @@ static float HudTextW(ImFont* f, float px, const char* s) {
     return f->CalcTextSizeA(CV(px * MmEm(f)), FLT_MAX, 0.0f, s).x / g_cv;
 }
 
-static const float HUD_LBL = 9, HUD_VAL = 15, HUD_GAP = 8, HUD_SEP = 18;
+static const float HUD_LBL = 14, HUD_VAL = 15, HUD_GAP = 8, HUD_SEP = 18;
 static void HudBar(const HudInfo& h, float cy) {
     const MmPal& P = MmP();
     ImDrawList* dl = ImGui::GetForegroundDrawList();
@@ -37,7 +37,7 @@ static void HudBar(const HudInfo& h, float cy) {
     float slot[4], w = 20;   // dot
     for (int i = 0; i < 4; i++) {
         slot[i] = HudTextW(g_fUiBold, HUD_VAL, widest[i]);
-        w += HudTextW(g_fMenu, HUD_LBL, lbl[i]) + HUD_GAP + slot[i] + (i ? HUD_SEP : 0);
+        w += HudTextW(g_fUiBold, HUD_LBL, lbl[i]) + HUD_GAP + slot[i] + (i ? HUD_SEP : 0);
     }
     w += 22;
     const float H = 22, x0 = 960 - w / 2, x1 = 960 + w / 2, y0 = cy - H / 2, y1 = cy + H / 2;
@@ -58,14 +58,14 @@ static void HudBar(const HudInfo& h, float cy) {
             dl->AddLine(CP(x + HUD_SEP / 2 - 1, cy - 6), CP(x + HUD_SEP / 2 - 1, cy + 6), MmC(P.acc, 0.6f), CV(1));
             x += HUD_SEP;
         }
-        x += MmText(dl, g_fMenu, HUD_LBL, x, cy + 1, MmC(P.dim, 0.85f), lbl[i]) + HUD_GAP;
+        x += MmText(dl, g_fUiBold, HUD_LBL, x, cy, MmC(P.dim, 0.9f), lbl[i]) + HUD_GAP;
         x += slot[i];
         MmText(dl, g_fUiBold, HUD_VAL, x, cy, MmC(P.text, 0.92f), v[i], 2);
     }
     if (h.desyncs > 0) {
         char d[24];
         snprintf(d, sizeof d, "DESYNC %d", ImClamp(h.desyncs, 0, 99));
-        MmText(dl, g_fMenu, HUD_LBL + 1, x1 + 30, cy + 1, MmRGBA(255, 90, 70), d, 0, 1, MmC(P.ink));
+        MmText(dl, g_fUiBold, HUD_LBL + 2, x1 + 30, cy + 1, MmRGBA(255, 90, 70), d, 0, 1, MmC(P.ink));
     }
     dl->PopClipRect();
 }
@@ -95,7 +95,7 @@ static void HudName(int side, const char* name) {
     // P1 / P2 badge (gold) + name
     float bx = side == 0 ? x0 + 9 : x1 - 9 - tw;
     dl->AddRectFilled(CP(bx, cy - 9), CP(bx + tw, cy + 9), MmC(P.gold, 0.9f), CV(3));
-    MmText(dl, g_fMenu, 10, bx + tw / 2, cy + 1, MmC(P.ink), tag, 1);
+    MmText(dl, g_fUiBold, 15, bx + tw / 2, cy, MmC(P.ink), tag, 1);
     float nx = side == 0 ? bx + tw + 10 : bx - 10;
     MmText(dl, g_fUiBold, 22, nx, cy, MmC(P.text, 0.95f), name, side == 0 ? 0 : 2, 1, MmC(P.ink));
     dl->PopClipRect();

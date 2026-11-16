@@ -223,6 +223,20 @@ static void __attribute__((thiscall)) H_KsDraw(void* self) {
     if (st == B_LOADING) return;
     reinterpret_cast<void(__attribute__((thiscall))*)(void*)>(FN_KS_DRAW)(self);
 }
+// Build 109b: no pause in online fights. The fight screen (CMLBtl update 0x5A9C80) calls
+// its pause menu's tick (CPauseMenu at Btl +0x44, 0x4EB290, thiscall) at 0x5A9E48 every
+// fighting frame (fight state 6); that tick opens the menu on Start / Esc. Online it is
+// not called at all (same on both PCs, every replay), unless the menu is somehow open
+// already (+0x1D), so it can still close.
+static const uint32_t CALL_PAUSE_TICK = 0x005A9E48, FN_PAUSE_TICK = 0x004EB290;
+static uint32_t pauseSkips = 0;
+static void __attribute__((thiscall)) H_PauseTick(void* self) {
+    if (NetOn() && !reinterpret_cast<uint8_t*>(self)[0x1D]) {
+        if (pauseSkips++ == 0) Log("boot: online fight: the game's pause menu is off");
+        return;
+    }
+    reinterpret_cast<void(__attribute__((thiscall))*)(void*)>(FN_PAUSE_TICK)(self);
+}
 static bool HookCall(uint32_t at, uint32_t fn, void* to) {
     uint8_t e[5] = {0xE8};
     int32_t rel = (int32_t)(fn - (at + 5));
@@ -265,6 +279,10 @@ static bool HoldsTitle(void* screen) {
 
 static bool Install() {
     InstallBoxSkip();
+    {   // build 109b
+        bool p = HookCall(CALL_PAUSE_TICK, FN_PAUSE_TICK, (void*)H_PauseTick);
+        Log("boot: pause menu block for online fights %s", p ? "installed" : "OFF (unexpected bytes)");
+    }
     {   // build 107c
         bool u = HookCall(CALL_KS_UPDATE, FN_KS_UPDATE, (void*)H_KsUpdate), d = HookCall(CALL_KS_DRAW, FN_KS_DRAW, (void*)H_KsDraw);
         Log("boot: Knight set menu on the loading screen: skip %s, hide %s", u ? "installed" : "OFF (unexpected bytes)", d ? "installed" : "OFF (unexpected bytes)");
