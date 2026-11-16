@@ -33,12 +33,14 @@
 // (act/partner 00-1E). Stages bg/stage00-0C still have no names: the game's
 // Versus stage select offers 8 of these 13.
 static const int LB_CHARS = 13, LB_CHARS_ALL = 14, LB_BOSS = 0x0D, LB_COLORS = 21, LB_BOSS_COLORS = 1,
-                 LB_ASSISTS = 31, LB_STAGES = 9, LB_TIMERS = 4;
+                 LB_ASSISTS = 31, LB_STAGES = 8, LB_TIMERS = 4;
 // Build 69/71: the game has 13 stage files (00-0C); 09, 0A, 0B and 0C are
 // copies of stage 00 that draw the characters black (tests 65b, 68, 70), so
 // they are left out. Picks hold a position in this list (Stage 01-10); the match settings
 // hold the game's own stage id.
-static const uint8_t LB_STAGE_IDS[LB_STAGES] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+// Build 102: only the 8 stages of normal play (the ones with a picture in the game's stage
+// select, MA10_CSEL 6-13); 08 is left out, also from Random.
+static const uint8_t LB_STAGE_IDS[LB_STAGES] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
 // Build 72: [ui] show_boss=1 in rollback.ini puts the boss back in the list, for the boss-crash test only.
 static int g_showBoss = -1;
 static inline int LbCharCount() {
@@ -182,7 +184,7 @@ static const char* LbTimerName(uint8_t t) { return LB_TIMER_NAMES[t < LB_TIMERS 
 
 static void LbNoteStart() {
     const MatchSettings& m = LB.s;
-    LbNote("match %u starts: %s (id %02X, colour %02u, assists %02X/%02X/%02X) vs %s (id %02X, colour %02u, assists %02X/%02X/%02X), %s (id %02X), rounds %u, %s, checksum %08X",
+    LbNote("match %u starts: %s (id %02X, colour %02u, knights %02X/%02X/%02X) vs %s (id %02X, colour %02u, knights %02X/%02X/%02X), %s (id %02X), rounds %u, %s, checksum %08X",
            m.matchNo, LbCharName(m.chara[0]), m.chara[0], m.color[0] + 1u, m.assist[0][0], m.assist[0][1], m.assist[0][2],
            LbCharName(m.chara[1]), m.chara[1], m.color[1] + 1u, m.assist[1][0], m.assist[1][1], m.assist[1][2],
            LbStageIdName(m.stage), m.stage, m.rounds, LbTimerName(m.timer), LB.sum);
@@ -196,6 +198,10 @@ static void LbReset() {
     LB.me.seq = seq + 1;
     LB.me.p = keep;
     LB.me.delay = (uint8_t)g_ncfg.delay;
+    {   // build 104: the name is always the Steam name (the typed name only without Steam)
+        const char* sn = net::SteamMyName();
+        if (sn[0]) snprintf(g_uiName, sizeof g_uiName, "%s", sn);
+    }
     snprintf(LB.me.name, sizeof LB.me.name, "%s", g_uiName);
     LeaveCriticalSection(&g_lobbyLock);
 }

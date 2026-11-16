@@ -21,7 +21,7 @@
 enum : uint8_t { M_HELLO = 1, M_INPUT = 2, M_FP = 3, M_RAW = 4, M_PING = 5, M_PONG = 6, M_BYE = 7, M_SURV = 8, M_SPAGE = 9, M_SAVE = 10, M_SAVEACK = 11,
                  M_LOBBY = 12, M_START = 13, M_STARTACK = 14 };   // build 57: lobby.inc
 static const uint32_t NET_MAGIC = 0x33425241;   // "ARB3"
-static const uint32_t NET_PROTO = 1, NET_BUILD = 89;
+static const uint32_t NET_PROTO = 1, NET_BUILD = MOD_BUILD;
 // Build 57: lobby and match setup (lobby.inc) and the overlay (overlay.inc)
 static void LbHandle(const uint8_t* p, int n);
 static void LobbyTick();
@@ -162,7 +162,7 @@ static void LoadNetSettings() {
     wchar_t ini[MAX_PATH];
     _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
     wchar_t w[64];
-    GetPrivateProfileStringW(L"net", L"mode", L"loopback", w, 64, ini);
+    GetPrivateProfileStringW(L"net", L"mode", L"steam", w, 64, ini);   // build 106: Steam unless the ini says otherwise
     g_ncfg.mode = _wcsicmp(w, L"lan") == 0 ? 1 : _wcsicmp(w, L"steam") == 0 ? 2 : 0;
     g_ncfg.delay = GetPrivateProfileIntW(L"net", L"input_delay", 2, ini);
     g_ncfg.wantSide = GetPrivateProfileIntW(L"net", L"side", 0, ini);

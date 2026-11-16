@@ -177,8 +177,30 @@ static void InstallBoxSkip() {
     Log("boot: end-of-fight rematch box skip %s (%d of 6 calls)", skipBox ? "installed" : "OFF, unexpected bytes", ok);
 }
 
+// Build 101: while our main menu covers the game's title screen, the title screen
+// doesn't run at all (no logos, intro movie, "press start", title music, attract demo).
+// Game main runs the current screen through the call at 0x5BE272 (already ours:
+// H_ChildUpdate in mod.cpp), which asks HoldsTitle first.
+static bool holdOn = false;
+static uint32_t heldFrames = 0;
+static bool HoldsTitle(void* screen) {
+    bool title = screen && *reinterpret_cast<uint32_t*>(screen) == VT_TITLE;
+    if (holdOn && title && g_holdTitle) {
+        if (heldFrames++ == 0) Log("boot: the game's title screen is on hold under our main menu");
+        return true;
+    }
+    if (heldFrames) { Log("boot: the game's title screen runs again (held %u frames)", heldFrames); heldFrames = 0; }
+    return false;
+}
+
 static bool Install() {
     InstallBoxSkip();
+    {
+        wchar_t ini[MAX_PATH];
+        _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
+        holdOn = GetPrivateProfileIntW(L"ui", L"hold_title", 1, ini) != 0;
+        Log("boot: title hold %s", holdOn ? "on (the game's title screen waits while our main menu is up)" : "OFF ([ui] hold_title=0)");
+    }
     if (util::BytesMatch(CALL_BTL_FINISHED, EXPECT_CALL_BTL_FINISHED, sizeof EXPECT_CALL_BTL_FINISHED))
         hookedAfter = util::WriteRel32(CALL_BTL_FINISHED, 0xE8, (void*)H_BtlFinished);
     Log("boot: after-fight hook %s", hookedAfter ? "installed" : "NOT installed (unexpected bytes); the game's own after-match screens will run");

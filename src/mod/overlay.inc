@@ -23,6 +23,9 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ui_theme.h"
+#ifndef UI_HARNESS
+#include <wincodec.h>
+#endif
 #ifndef UI_HARNESS     // (UI_HARNESS: the screens alone, drawn to a picture for checking the layout)
 #include <d3d9.h>
 #include "backends/imgui_impl_dx9.h"
@@ -69,9 +72,13 @@ static struct Ui {
     bool detect = false, detectArmed = false;
     uint32_t screenVt = 0;
     bool netOn = false, netHello = false;
+    std::atomic<int> pgReq{0};            // build 91: 3 open our main menu (button on the overlay's first screen)
 } U;
 
 static ImFont *g_fBody = nullptr, *g_fTitle = nullptr, *g_fSmall = nullptr;
+static void PgSetOpen(bool on);       // our menu open / closed (canvas.inc)
+static bool PgIsOpen();
+namespace snd { static void Tick(bool menuOpen); static bool BankReady(); static void SetLog(bool on); }   // build 92 (sound.inc)
 
 #ifndef UI_HARNESS
 // ---- settings --------------------------------------------------------------
@@ -126,11 +133,11 @@ static void UiSessionStarted() {
 
 // ---- game thread ---------------------------------------------------------------
 static bool KeyPressed(int vk);
-static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+[[maybe_unused]] static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 // Build 58 diagnostics: which fields of the title screen object change when the
 // "press start" picture turns into the main menu (so a later build can tell the two
 // apart exactly). Fields that keep changing (timers) are only logged a few times.
-static void UiTitleWatch(uint32_t vt, uint32_t ptr) {
+[[maybe_unused]] static void UiTitleWatch(uint32_t vt, uint32_t ptr) {
     static uint32_t lastPtr = 0, prev[0xC0];
     static uint8_t changes[0xC0];
     static int lines = 0;
@@ -158,6 +165,7 @@ static void UiTitleWatch(uint32_t vt, uint32_t ptr) {
 }
 // Every frame on the game thread (from PollHotkeys), also when the window is in the background.
 static uint32_t g_presents = 0;
+static volatile bool g_holdTitle = false;   // build 101: our main menu covers the title screen; keep it on hold
 static volatile int g_drawLog = 0;   // build 62: log the next pictures after F1 opens the overlay
 static void UiHookWatch();
 static void UiGameThreadTick(bool focused) {
@@ -173,6 +181,42 @@ static void UiGameThreadTick(bool focused) {
     bool combo = (U.navBits & (PB_BACK | PB_START)) == (PB_BACK | PB_START);
     bool toggle = (KeyPressed(VK_F1) && focused) || (combo && !comboWas);
     comboWas = combo;
+    // F3 (or the overlay's button) opens / closes our main menu; not during fights or tests
+    {
+        int req = U.pgReq.exchange(0);
+        bool f3 = KeyPressed(VK_F3) && focused;
+        bool wantMm = req == 3 || f3;
+        bool can = !inSynced && g_mode == Mode::Idle && !g_auto;
+        // build 101: our main menu is the game's front end. It opens by itself on the game's
+        // title screen (from its first picture, so the intro never shows) and every time the
+        // game comes back to it; closing it by hand (F1 / F3) keeps it shut until the next visit.
+        static bool mmShut = false;
+        static uint32_t prevVt = 0;
+        if (vt == VT_TITLE && prevVt != VT_TITLE) mmShut = false;
+        prevVt = vt;
+        if (PgIsOpen() && (toggle || !can || f3)) {
+            if (can) { mmShut = true; Log("ui: main menu closed by hand (F3 opens it again)"); }
+            PgSetOpen(false); toggle = false;
+        }
+        else if (!PgIsOpen() && wantMm && can) { PgSetOpen(true); mmShut = false; }
+        else if (!PgIsOpen() && can && !NetOn() && !mmShut && vt == VT_TITLE) {
+            PgSetOpen(true);
+            if (!U.visible) U.visible = true;
+            U.autoOpened = true;
+            Log("ui: main menu opened on the game's title screen (pictures so far %u)", g_presents);
+        }
+        // the game's title screen stays on hold while our main menu covers it (boot.inc)
+        g_holdTitle = PgIsOpen() && U.visible.load();
+    }
+    // build 92: our main menu plays its own music and sounds through the game's sound engine
+    // (and logs the sounds the game plays outside fights)
+    {
+        static bool hookTried = false;
+        snd::SetLog(!inSynced && g_mode == Mode::Idle && !g_auto && !NetOn());
+        if (!hookTried && snd::BankReady()) { hookTried = true; HookSoundBank(); }
+        snd::Tick(PgIsOpen());
+        net::RoomTick((int)NET_BUILD);   // build 100: Steam rooms (lobbies)
+    }
     if (toggle) {
         bool v = !U.visible.load();
         U.visible = v;
@@ -180,29 +224,8 @@ static void UiGameThreadTick(bool focused) {
         Log("ui: overlay %s (pictures so far %u)", v ? "shown" : "hidden", g_presents);
         if (v) g_drawLog = 3;
     }
-    // Opens by itself the first time the main menu is up (build 58, test 57: not on the
-    // "press start" picture). The title picture and the main menu are one screen
-    // (CMLTitle), so: wait for a button press on it, its release, then half a second.
-    static uint32_t prevAny = 0, titleBits = 0;
-    if (!U.autoOpened) {
-        if (vt != VT_TITLE) { if (U.titleStep < 3) U.titleStep = 0; }
-        else if (U.titleStep == 0) {             // a new press (a button that is always on doesn't count)
-            uint32_t fresh = U.anyRaw & ~prevAny;
-            bool key = focused && (KeyDown(VK_RETURN) || KeyDown(VK_SPACE));
-            if (fresh || key) { U.titleStep = 1; titleBits = fresh; }
-        }
-        else if (U.titleStep == 1) {
-            if (!(U.anyRaw & titleBits) && !(focused && (KeyDown(VK_RETURN) || KeyDown(VK_SPACE)))) { U.titleStep = 2; U.titleWait = 0; }
-        }
-        else if (U.titleStep == 2 && ++U.titleWait >= 30) {
-            U.titleStep = 3;
-            U.autoOpened = true;
-            if (!U.visible) { U.visible = true; Log("ui: overlay opened on the main menu (F1 hides it)"); }
-        }
-        if (U.visible) U.autoOpened = true;   // opened by hand with F1 first
-        UiTitleWatch(vt, ptr);
-    }
-    prevAny = U.anyRaw;
+    // (build 58-100: opened by itself after a press on the "press start" picture; build 101
+    // opens our main menu straight away instead, above)
     // the game's own synced screens (old menu path) and tests: overlay steps aside
     if (U.visible && (inSynced || g_mode != Mode::Idle || g_auto)) { U.visible = false; U.drain = true; Log("ui: overlay hidden (game screen in step / test running)"); }
     U.capture = U.visible.load() && focused && !inSynced && g_mode == Mode::Idle && !g_auto;
@@ -211,7 +234,7 @@ static void UiGameThreadTick(bool focused) {
     if (c == 1 && N.st == NS_OFF) {
         if (g_mode != Mode::Idle || g_auto) SetStatus("stop the test first (F7 / F8), then connect");
         else {
-            snprintf(g_uiName, sizeof g_uiName, "%s", U.name);
+            snprintf(g_uiName, sizeof g_uiName, "%s", net::SteamMyName()[0] ? net::SteamMyName() : U.name);
             if (U.mode == 2 && U.pickFriend >= 0 && U.pickFriend < U.nFriends) {
                 g_netPick = U.friends[U.pickFriend].id;
                 snprintf(g_netPickName, sizeof g_netPickName, "%s", U.friends[U.pickFriend].name);
@@ -367,26 +390,60 @@ static LRESULT CALLBACK UiWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return CallWindowProcW(g_origWndProc, h, msg, wp, lp);
 }
 
-static void UiLoadFonts(float scale) {
-    ImGuiIO& io = ImGui::GetIO();
-    io.Fonts->Clear();
-    char dir[MAX_PATH];
-    GetWindowsDirectoryA(dir, MAX_PATH);
-    char body[MAX_PATH], title[MAX_PATH];
-    snprintf(body, MAX_PATH, "%s\\Fonts\\%s", dir, theme::FONT_BODY);
-    snprintf(title, MAX_PATH, "%s\\Fonts\\%s", dir, theme::FONT_TITLE);
-    auto load = [&](const char* path, float px) -> ImFont* {
-        if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {
-            ImFont* f = io.Fonts->AddFontFromFileTTF(path, px * scale);
-            if (f) return f;
-        }
-        ImFontConfig c;
-        c.SizePixels = px * scale;
-        return io.Fonts->AddFontDefault(&c);
-    };
-    g_fBody = load(body, theme::BODY_PX);
-    g_fTitle = load(title, theme::TITLE_PX);
-    g_fSmall = load(body, theme::SMALL_PX);
+static void UiLoadFonts(float scale);   // (after canvas.inc: it uses its font lookup)
+
+// Build 90: one scale for the whole overlay: the canvas is 1920x1080, fitted into the picture.
+static float UiScaleFor(float w, float h) {
+    float s = w / 1920.0f < h / 1080.0f ? w / 1920.0f : h / 1080.0f;
+    return s < 0.5f ? 0.5f : s;
+}
+// Build 90: pictures for the game's own sprites (gameart.inc). Managed pool: they
+// survive a display reset; a new device drops them (art::FreeAll).
+static void* UiMakeTex(const uint32_t* bgra, int w, int h) {
+    IDirect3DTexture9* t = nullptr;
+    if (!g_dev || FAILED(g_dev->CreateTexture(w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &t, nullptr)) || !t) return nullptr;
+    D3DLOCKED_RECT lr;
+    if (FAILED(t->LockRect(0, &lr, nullptr, 0))) { t->Release(); return nullptr; }
+    for (int y = 0; y < h; y++) memcpy((uint8_t*)lr.pBits + (size_t)y * lr.Pitch, bgra + (size_t)y * w, (size_t)w * 4);
+    t->UnlockRect(0);
+    return t;
+}
+static void UiFreeTex(void* t) { if (t) static_cast<IDirect3DTexture9*>(t)->Release(); }
+// build 94: read a picture file of the mod (PNG etc.) with Windows' own image decoder (WIC)
+static bool UiLoadImage(const wchar_t* path, std::vector<uint32_t>& px, int& w, int& h) {
+    static const GUID CLSID_WicFactory = {0xcacaf262, 0x9370, 0x4615, {0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a}};
+    static const GUID IID_WicFactory = {0xec5ec8a9, 0xc395, 0x4314, {0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70}};
+    static const GUID FMT_BGRA = {0x6fddc324, 0x4e03, 0x4bfe, {0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x0f}};
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return false;
+    HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    IWICImagingFactory* f = nullptr;
+    IWICBitmapDecoder* dec = nullptr;
+    IWICBitmapFrameDecode* fr = nullptr;
+    IWICFormatConverter* cv = nullptr;
+    bool ok = false;
+    HRESULT hr = CoCreateInstance(CLSID_WicFactory, nullptr, CLSCTX_INPROC_SERVER, IID_WicFactory, (void**)&f);
+    if (SUCCEEDED(hr)) hr = f->CreateDecoderFromFilename(path, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &dec);
+    if (SUCCEEDED(hr)) hr = dec->GetFrame(0, &fr);
+    if (SUCCEEDED(hr)) hr = f->CreateFormatConverter(&cv);
+    if (SUCCEEDED(hr)) hr = cv->Initialize(fr, FMT_BGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+    UINT uw = 0, uh = 0;
+    if (SUCCEEDED(hr)) hr = cv->GetSize(&uw, &uh);
+    if (SUCCEEDED(hr) && uw && uh && uw <= 4096 && uh <= 4096) {
+        px.resize((size_t)uw * uh);
+        hr = cv->CopyPixels(nullptr, uw * 4, (UINT)(px.size() * 4), (BYTE*)px.data());
+        ok = SUCCEEDED(hr);
+        w = (int)uw; h = (int)uh;
+    }
+    if (cv) cv->Release();
+    if (fr) fr->Release();
+    if (dec) dec->Release();
+    if (f) f->Release();
+    if (SUCCEEDED(co)) CoUninitialize();
+    char n[MAX_PATH];
+    snprintf(n, sizeof n, "%ls", wcsrchr(path, L'\\') ? wcsrchr(path, L'\\') + 1 : path);
+    if (ok) Log("ui: picture %s read (%dx%d)", n, w, h);
+    else Log("ui: picture %s could not be read (0x%08lX)", n, hr);
+    return ok;
 }
 
 static bool UiInit(IDirect3DDevice9* dev) {
@@ -408,10 +465,21 @@ static bool UiInit(IDirect3DDevice9* dev) {
         if (SUCCEEDED(bb->GetDesc(&d))) h = (float)d.Height;
         bb->Release();
     }
-    g_uiScale = h / 1080.0f;
-    if (g_uiScale < 0.6f) g_uiScale = 0.6f;
+    {
+        float w = 1920.0f;
+        IDirect3DSurface9* b2 = nullptr;
+        if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &b2)) && b2) {
+            D3DSURFACE_DESC d;
+            if (SUCCEEDED(b2->GetDesc(&d))) w = (float)d.Width;
+            b2->Release();
+        }
+        g_uiScale = UiScaleFor(w, h);
+    }
     UiLoadFonts(g_uiScale);
     theme::Apply(g_uiScale);
+    art::MakeTex = UiMakeTex;
+    art::FreeTex = UiFreeTex;
+    art::LoadImageFile = UiLoadImage;
     if (!ImGui_ImplWin32_Init(hwnd) || !ImGui_ImplDX9_Init(dev)) {
         Log("ui: overlay could not start (ImGui init failed)");
         return false;
@@ -523,6 +591,8 @@ static void UiConnectScreen() {
     }
     ImGui::SameLine();
     if (UiBigButton("Controls")) { U.backTo = US_CONNECT; U.screen = US_CONTROLS; }
+    ImGui::SameLine();
+    if (UiBigButton("Main menu (F3)")) U.pgReq = 3;
 }
 
 static int UiSuggestDelay() {
@@ -637,7 +707,7 @@ static void UiSideColumn(int side, LbSide& s, bool mine, bool present) {
     ImGui::TextColored(theme::TextDim(), "Colour");
     snprintf(id, sizeof id, "##co%d", side);
     if (UiPickCombo(id, &s.p.color, s.p.chara == LB_RANDOM ? LB_COLORS : LbColorCount(s.p.chara), false, UiColorName, ed)) LbChanged();
-    static const char* const slot[3] = {"Assist (QCB + L)", "Assist (QCB + M)", "Assist (QCB + H)"};
+    static const char* const slot[3] = {"Support Knight (QCB + L)", "Support Knight (QCB + M)", "Support Knight (QCB + H)"};
     for (int k = 0; k < 3; k++) {
         ImGui::TextColored(theme::TextDim(), "%s", slot[k]);
         snprintf(id, sizeof id, "##as%d_%d", side, k);
@@ -701,7 +771,7 @@ static void UiMatchPhase(LbSide& me, bool host) {
         };
         row("Character", LbCharName(s.chara[0]), LbCharName(s.chara[1]));
         row("Colour", UiColorName(s.color[0]), UiColorName(s.color[1]));
-        static const char* const slotName[3] = {"Assist L", "Assist M", "Assist H"};
+        static const char* const slotName[3] = {"Knight L", "Knight M", "Knight H"};
         for (int k = 0; k < 3; k++) row(slotName[k], UiAssistName(s.assist[0][k]), UiAssistName(s.assist[1][k]));
         ImGui::EndTable();
     }
@@ -765,7 +835,7 @@ static void UiButtonsText(uint32_t r, char* out, size_t n) {
 
 static void UiControlsScreen() {
     UiHeading("Controls");
-    UiNote("Which controller is yours on this PC. Changing the button layout here comes in a later build.");
+    UiNote("Which controller is yours on this PC. The button layout is in the main menu: Settings > Controls.");
     ImGui::Spacing();
     uint32_t gameDev = PadOfPlayer(0);
     char autoL[96];
@@ -788,18 +858,6 @@ static void UiControlsScreen() {
     }
     if (!U.detect) { if (UiBigButton("Pick by pressing a button")) { U.detect = true; U.detectArmed = false; } }
     else { ImGui::TextColored(theme::Accent(), "Press any button on your controller..."); ImGui::SameLine(); if (UiBigButton("Cancel")) U.detect = false; }
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("Game's button layout for player 1");
-    ImGui::PushFont(g_fSmall);
-    const uint32_t* cfg = N.saved ? N.origCfg : (const uint32_t*)G_PAD_CFG;
-    for (int i = 0; i < 12; i++) {
-        char b[96];
-        UiButtonsText(cfg[i], b, sizeof b);
-        ImGui::Text("Game button %2d: %s", i + 1, b[0] ? b : "-");
-        if (i % 3 != 2) ImGui::SameLine(ImGui::GetContentRegionAvail().x * ((i % 3) + 1) / 3.0f);
-    }
-    ImGui::PopFont();
     ImGui::Spacing();
     if (UiBigButton("Back", true)) U.screen = U.backTo;
 }
@@ -825,12 +883,13 @@ static void UiMainPanel(const ImVec2& disp) {
     ImGui::End();
 }
 
+static bool MmNetInfoOn();   // menu.inc (build 104)
 static void UiStatusBar(const ImVec2& disp) {
     char ns[200];
     EnterCriticalSection(&g_statusLock);
     snprintf(ns, sizeof ns, "%s", g_netStatus);
     LeaveCriticalSection(&g_statusLock);
-    if (!U.netOn || !ns[0]) return;
+    if (!U.netOn || !ns[0] || !MmNetInfoOn()) return;   // build 104: Settings > Online > Connection info
     ImGui::SetNextWindowPos(ImVec2(disp.x - 10, 10), ImGuiCond_Always, ImVec2(1, 0));
     ImGui::SetNextWindowBgAlpha(0.55f);
     ImGui::Begin("##status", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
@@ -841,12 +900,71 @@ static void UiStatusBar(const ImVec2& disp) {
     ImGui::End();
 }
 
+#include "canvas.inc"   // build 106: was playground.inc
+#include "menu.inc"
 #ifndef UI_HARNESS
+#include "sound.inc"
+#endif
+static bool PgIsOpen() { return PG.open.load(); }
+
+#ifndef UI_HARNESS
+// Our fonts (mod fonts folder first, then Windows' fonts) at the canvas scale.
+static void UiLoadFonts(float scale) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    static const ImWchar latin[] = {0x0020, 0x00FF, 0};
+    auto load = [&](const char* file, float px) -> ImFont* {
+        char path[MAX_PATH];
+        if (PgFontPath(file, path, sizeof path)) {
+            ImFontConfig c;
+            c.OversampleH = 2;
+            ImFont* f = io.Fonts->AddFontFromFileTTF(path, px * scale, &c, latin);
+            if (f) return f;
+            Log("ui: font %s could not be read; using the built-in one", file);
+        }
+        ImFontConfig c;
+        c.SizePixels = px * scale;
+        return io.Fonts->AddFontDefault(&c);
+    };
+    const theme::Look& t = theme::T();
+    g_fBody = load(t.fontBody, t.bodyPx);
+    g_fTitle = load(t.fontTitle, t.titlePx);
+    g_fSmall = load(t.fontBody, t.smallPx);
+    g_fMenu = load("Michroma-Regular.ttf", MM_MENU_PX);                 // build 91: main menu preview
+    g_fUi = load("SairaSemiCondensed-Regular.ttf", MM_UI_PX);
+    g_fUiBold = load("SairaSemiCondensed-Bold.ttf", MM_UI_PX);
+    io.Fonts->Build();
+}
+
 static void UiFrame(IDirect3DDevice9* dev) {
     ImGuiIO& io = ImGui::GetIO();
     // the mouse pointer is only ours while the overlay has the input
     if (U.capture.load() && !g_softCursor.load()) io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
     else io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+    // build 90: one scale for the whole overlay (canvas 1920x1080 fitted into the picture);
+    // fonts are made again at the new size when the resolution changes, so text stays sharp
+    {
+        IDirect3DSurface9* b0 = nullptr;
+        D3DSURFACE_DESC d0{};
+        if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &b0)) && b0) { b0->GetDesc(&d0); b0->Release(); }
+        if (d0.Width && d0.Height) {
+            float sc = UiScaleFor((float)d0.Width, (float)d0.Height);
+            if (sc > g_uiScale * 1.004f || sc < g_uiScale * 0.996f || g_fontsDirty) {
+                if (!g_fontsDirty) Log("ui: picture is now %ux%u, overlay scale %.2f -> %.2f", d0.Width, d0.Height, g_uiScale, sc);
+                g_uiScale = sc;
+                g_fontsDirty = false;
+                UiLoadFonts(sc);
+                ImGui_ImplDX9_InvalidateDeviceObjects();     // the font picture is made again by NewFrame
+            }
+            g_disp = ImVec2((float)d0.Width, (float)d0.Height);
+            g_cv = g_uiScale;
+            g_cvO = ImVec2((d0.Width - 1920.0f * g_cv) * 0.5f, (d0.Height - 1080.0f * g_cv) * 0.5f);
+        }
+        theme::Apply(g_uiScale);
+        art::NewFrame();
+        if (PG.freeArt.exchange(false)) { art::FreeAll(true); Log("ui: game pictures let go"); }
+        else art::TrimFiles(PG.open.load() ? 5 : 0);   // build 101: keep the menu's pictures loaded across screens
+    }
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     // the picture may be bigger or smaller than the window: draw in back-buffer pixels
@@ -901,7 +1019,6 @@ static void UiFrame(IDirect3DDevice9* dev) {
         io.NavInputs[ImGuiNavInput_Activate] = (b & PB_A) ? 1.0f : 0.0f;
         io.NavInputs[ImGuiNavInput_Cancel] = (b & PB_B) ? 1.0f : 0.0f;
         io.NavInputs[ImGuiNavInput_Input] = (b & PB_Y) ? 1.0f : 0.0f;
-        io.NavInputs[ImGuiNavInput_Menu] = (b & PB_X) ? 1.0f : 0.0f;
         io.NavInputs[ImGuiNavInput_DpadLeft] = (b & PB_LEFT) ? 1.0f : 0.0f;
         io.NavInputs[ImGuiNavInput_DpadRight] = (b & PB_RIGHT) ? 1.0f : 0.0f;
         io.NavInputs[ImGuiNavInput_DpadUp] = (b & PB_UP) ? 1.0f : 0.0f;
@@ -917,7 +1034,9 @@ static void UiFrame(IDirect3DDevice9* dev) {
     }
     ImGui::NewFrame();
     ImGui::PushFont(g_fBody);
-    if (show) UiMainPanel(io.DisplaySize);
+    if (!(show && PG.open.load())) MM.wasOpen = false;   // intro plays again next time
+    if (show && PG.open.load()) MmFrame();
+    else if (show) UiMainPanel(io.DisplaySize);
     else UiStatusBar(io.DisplaySize);
     ImGui::PopFont();
     ImGui::EndFrame();
@@ -934,6 +1053,7 @@ static HRESULT WINAPI H_Present(IDirect3DDevice9* dev, const RECT* a, const RECT
 static HRESULT WINAPI H_PresentInner(IDirect3DDevice9* dev, const RECT* a, const RECT* b, HWND c, const RGNDATA* d) {
     if (g_resetImgui && dev == g_dev && g_imgui) {
         g_resetImgui = false;
+        art::FreeAll(false);                     // build 90: game pictures belong to the old device
         ImGui_ImplDX9_Shutdown();
         bool ok = ImGui_ImplDX9_Init(dev);
         Log("ui: overlay moved to the new device (%s)", ok ? "ok" : "FAILED");
