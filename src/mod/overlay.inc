@@ -1010,6 +1010,7 @@ static void DcFrame() {
             bool held = g_dcFreeze.exchange(false);
             if (held) g_dcExit = true;
             DC.show = false;
+            MM.prevNav = 0xFFFFFFFFu;   // build 108b: the OK press must not also pick a main menu entry
             Log("ui: connection lost pop-up: OK (%s)", held ? "ending the fight, back to the main menu" : "nothing held");
         }
         return;

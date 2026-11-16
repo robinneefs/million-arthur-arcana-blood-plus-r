@@ -394,6 +394,9 @@ static void MmFrame() {
 static void MmMainFrame() {
     double now = ImGui::GetTime();
     if (!MM.wasOpen || MM.openT < 0) MM.openT = now;
+#ifndef UI_HARNESS
+    if (!MM.wasOpen) MM.prevNav = 0xFFFFFFFFu;   // build 108b: a button still held (e.g. OK on a pop-up) must be let go first
+#endif
     MM.wasOpen = true;
     const MmPal& P = MmP();
     float t = (float)(now - MM.openT);
