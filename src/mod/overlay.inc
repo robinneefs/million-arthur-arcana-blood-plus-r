@@ -214,8 +214,10 @@ static uint32_t g_presents = 0;
 static volatile bool g_holdTitle = false;   // build 101: our main menu covers the title screen; keep it on hold
 static volatile int g_drawLog = 0;   // build 62: log the next pictures after F1 opens the overlay
 static void UiHookWatch();
+static void BorderlessTick(bool focused);
 static void UiGameThreadTick(bool focused) {
     UiHookWatch();
+    BorderlessTick(focused);   // build 110
     uint32_t vt, ptr;
     CurScreen(&vt, &ptr);
     U.screenVt = vt;
@@ -417,7 +419,48 @@ static void UiCursorOnWindowThread(HWND h, bool cap) {
     }
 }
 
+// Build 110: borderless full screen. The game runs windowed (its own option); we take the
+// frame off its window and stretch it over the whole monitor (D3D9 scales the picture to
+// the window). Done on the window's own thread (posted message), checked once a second.
+static const UINT WM_MOD_BORDERLESS = WM_APP + 0x51;
+static struct { bool on = false; LONG_PTR style = 0, exStyle = 0; RECT rect{}; } g_bl;
+static void BorderlessApply(HWND h, bool want) {
+    if (want) {
+        HMONITOR mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof mi;
+        if (!GetMonitorInfoW(mon, &mi)) return;
+        const RECT& m = mi.rcMonitor;
+        LONG_PTR st = GetWindowLongPtrW(h, GWL_STYLE);
+        RECT wr{};
+        GetWindowRect(h, &wr);
+        bool frameless = !(st & (WS_CAPTION | WS_THICKFRAME));
+        bool covers = wr.left == m.left && wr.top == m.top && wr.right == m.right && wr.bottom == m.bottom;
+        if (g_bl.on && frameless && covers) return;
+        if (!g_bl.on) { g_bl.style = st; g_bl.exStyle = GetWindowLongPtrW(h, GWL_EXSTYLE); g_bl.rect = wr; }
+        SetWindowLongPtrW(h, GWL_STYLE, (st & ~(LONG_PTR)(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER | WS_DLGFRAME)) | WS_POPUP);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, GetWindowLongPtrW(h, GWL_EXSTYLE) & ~(LONG_PTR)(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE));
+        SetWindowPos(h, nullptr, m.left, m.top, m.right - m.left, m.bottom - m.top, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOOWNERZORDER);
+        Log("ui: borderless: window %s %ldx%ld at %ld,%ld (was %ldx%ld%s)", g_bl.on ? "put back over" : "now covers", m.right - m.left, m.bottom - m.top,
+            m.left, m.top, wr.right - wr.left, wr.bottom - wr.top, frameless ? "" : ", with a frame");
+        g_bl.on = true;
+    } else if (g_bl.on) {
+        g_bl.on = false;
+        SetWindowLongPtrW(h, GWL_STYLE, g_bl.style);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, g_bl.exStyle);
+        SetWindowPos(h, nullptr, g_bl.rect.left, g_bl.rect.top, g_bl.rect.right - g_bl.rect.left, g_bl.rect.bottom - g_bl.rect.top,
+                     SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOOWNERZORDER);
+        Log("ui: borderless off: window frame and size put back (%ldx%ld)", g_bl.rect.right - g_bl.rect.left, g_bl.rect.bottom - g_bl.rect.top);
+    }
+}
+
 static LRESULT CALLBACK UiWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_MOD_BORDERLESS) { BorderlessApply(h, wp != 0); return 0; }
+    if (msg == WM_ACTIVATEAPP || msg == WM_SIZE) {   // build 110: alt-tab check
+        static int logs = 0;
+        if (logs++ < 60) Log("ui: window %s (%u x %u)", msg == WM_SIZE ? (wp == SIZE_MINIMIZED ? "minimised" : "resized") : wp ? "in front again" : "in the background",
+                             (unsigned)LOWORD(lp), (unsigned)HIWORD(lp));
+    }
     // build 108: closing the game tells the other player so (instead of an 8 s time-out there)
     if (msg == WM_CLOSE && N.st != NS_OFF) {
         if (OnGameThread()) { g_byeClosing = true; NetEnd("you closed the game"); }
@@ -995,6 +1038,31 @@ static void UiLoadFonts(float scale) {
 }
 
 // Build 108: the waiting banner and the connection lost pop-up (drawing thread)
+// Build 110 (game thread): borderless request (the window thread does it) + how the game runs in the background
+static void BorderlessTick(bool focused) {
+        static bool bootWindowed = false, haveBoot = false;
+        static uint32_t lastPost = 0, bgSince = 0, bgFrames = 0, bgLast = 0;
+        static bool wasFocused = true;
+        if (!haveBoot) { haveBoot = true; MmLoadPrefs(); bootWindowed = *reinterpret_cast<int*>(0x04DCAD00 + 0x40) != 0;
+                         Log("ui: started %s; borderless %s", bootWindowed ? "windowed" : "full screen", g_borderless.load() ? "on" : "off"); }
+        HWND hw = *reinterpret_cast<HWND*>(addr::G_HWND);
+        uint32_t now = GetTickCount();
+        if (hw && now - lastPost >= 1000) {
+            lastPost = now;
+            bool want = bootWindowed && g_borderless.load();
+            if (want || g_bl.on) PostMessageW(hw, WM_MOD_BORDERLESS, want ? 1 : 0, 0);
+        }
+        if (!focused) {
+            if (wasFocused) { bgSince = now; bgFrames = 0; bgLast = now; Log("ui: game in the background (online %s)", NetOn() ? "yes" : "no"); }
+            bgFrames++;
+            if (now - bgLast >= 5000) { Log("ui: in the background for %u s: %u game frames ran", (now - bgSince) / 1000, bgFrames); bgLast = now; }
+        } else if (!wasFocused) {
+            Log("ui: game in front again after %u ms; %u game frames ran meanwhile (%.0f per second); online %s", now - bgSince, bgFrames,
+                now > bgSince ? bgFrames * 1000.0 / (now - bgSince) : 0.0, NetOn() ? "yes" : "no");
+        }
+        wasFocused = focused;
+    }
+
 // Build 109: info bar + names over our online fights (drawing thread)
 static void HudFrame() {
     if (!U.netOn || U.screenVt != SCENE_BTL) return;

@@ -359,7 +359,13 @@ static void StChange(int dx) {
         else { g_menuMusic = !g_menuMusic.load(); MmSavePref(L"menu_music", g_menuMusic); g_musicReapply = true; MM_SND |= 2; }
     } else if (ST.tab == 2) {
         if (r == 0 && g.nRes > 0) { int d = dx ? dx : 1; g.resIdx = (g.resIdx + d + g.nRes) % g.nRes; gcfg::SetDisplay(g); }
-        else if (r == 1) gcfg::SetWindowed(g, !g.windowed);
+        else if (r == 1) {   // build 110: Fullscreen -> Windowed -> Borderless
+            int mode = !g.windowed ? 0 : g_borderless.load() ? 2 : 1, d = dx ? dx : 1;
+            mode = (mode + d + 3) % 3;
+            if ((mode != 0) != g.windowed) gcfg::SetWindowed(g, mode != 0);
+            g_borderless = mode == 2;
+            MmSavePref(L"borderless", mode == 2 ? 1 : 0);
+        }
         else if (r == 2) { g.vsync = !g.vsync; gcfg::SetDisplay(g); }
         ST.dirty = true;
         MM_SND |= 1;
@@ -545,16 +551,16 @@ static void MmSettingsFrame() {
         for (int r = 0; r < 3; r++) {
             if (!rowHit(r, X0 + 30, ys[r] - 45, X1 - 30, ys[r] + 45)) continue;
             float mx = io.MousePos.x;
-            StChange(r < 2 && mx < CP(X0 + 760, 0).x ? -1 : 1);
+            StChange(r < 2 && mx < CP(X0 + 760, 0).x ? -1 : 1);   // (row 1: three modes)
         }
         StRow(dl, X0 + 30, X1 - 30, ys[0], "Resolution", SR == 0, T.pulse);
         StChoice(dl, X0 + 520, X0 + 1000, ys[0], res, SR == 0);
         StRow(dl, X0 + 30, X1 - 30, ys[1], "Display mode", SR == 1, T.pulse);
-        StChoice(dl, X0 + 520, X0 + 1000, ys[1], g.windowed ? "Windowed" : "Fullscreen", SR == 1);
+        StChoice(dl, X0 + 520, X0 + 1000, ys[1], !g.windowed ? "Fullscreen" : g_borderless.load() ? "Borderless" : "Windowed", SR == 1);
         StRow(dl, X0 + 30, X1 - 30, ys[2], "V-Sync", SR == 2, T.pulse);
         StToggle(dl, X0 + 520, ys[2], g.vsync);
         MmLine(dl, X0 + 50, Y0 + 390, X1 - X0 - 100, 1, MmC(P.acc, 0.6f));
-        MmText(dl, g_fUi, 24, X0 + 50, Y0 + 440, MmC(P.gold), "These take effect the next time you start the game.");
+        MmText(dl, g_fUi, 24, X0 + 50, Y0 + 440, MmC(P.gold), "These take effect the next time you start the game (Borderless: right away, when the game runs windowed).");
         MmText(dl, g_fUi, 21, X0 + 50, Y0 + 476, MmC(P.faint), "They are the game's own display settings: the game's options menu shows the same.");
     } else if (ST.tab == 3) {
         MmSection(dl, X0, Y0, X1, Y1, "ONLINE");
