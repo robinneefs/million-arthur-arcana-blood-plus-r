@@ -1,5 +1,5 @@
 ; Arcana Blood +R installer (NSIS 3). Built by tools/make-release.sh:
-;   makensis -DVERSION=0.1.0-beta -DSRC=<folder with the release files> -DOUT=<setup.exe> installer/installer.nsi
+;   makensis -DVERSION=0.1.0-beta -DICON=<.ico> -DSRC=<folder with the release files> -DOUT=<setup.exe> installer/installer.nsi
 ; Installs for the current user only (no admin rights), so the launcher's update check can
 ; replace the files later. rollback.ini (Settings, My setup) is never overwritten.
 Unicode true
@@ -20,6 +20,8 @@ SetCompressor /SOLID lzma
 BrandingText "${APPNAME} ${VERSION}"
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "${ICON}"
+!define MUI_UNICON "${ICON}"
 !define MUI_WELCOMEPAGE_TITLE "${APPNAME} ${VERSION}"
 !define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME}, a fan-made rollback netcode mod for the Steam version of Million Arthur: Arcana Blood.$\r$\n$\r$\nThe mod never changes the game's files. You need the Steam version of the game and Steam running.$\r$\n$\r$\nThis is a BETA: problems are expected."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\arcana_launcher.exe"

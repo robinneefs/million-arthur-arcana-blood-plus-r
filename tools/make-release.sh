@@ -20,7 +20,7 @@ for f in config/README.txt LICENSE; do
 done
 sed -i 's/\r*$/\r/' "dist/$NAME/rollback.ini"
 (cd dist && zip -qr "$NAME.zip" "$NAME")
-makensis -V2 -DVERSION="$VER" -DSRC="$(pwd)/dist/$NAME" -DOUT="$(pwd)/dist/$NAME-Setup.exe" installer/installer.nsi
+makensis -V2 -DVERSION="$VER" -DICON="$(pwd)/assets/icon/arcana_plusr.ico" -DSRC="$(pwd)/dist/$NAME" -DOUT="$(pwd)/dist/$NAME-Setup.exe" installer/installer.nsi
 (cd dist && sha256sum "$NAME.zip" "$NAME-Setup.exe" > SHA256SUMS.txt)
 echo "dist/$NAME.zip"
 echo "dist/$NAME-Setup.exe"
