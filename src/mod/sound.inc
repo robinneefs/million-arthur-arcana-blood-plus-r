@@ -156,7 +156,16 @@ static void Tick(bool menuOpen) {
             Log("sound: game music %u back", M.gameTrack);
         }
     }
-    if (!M.active) { MM_SND = 0; return; }
+    if (!M.active) {
+        // build 118: the after-match screen over the fight has the menu sounds too (move / select / back);
+        // played between game updates like the connection-lost alert, never during a rollback replay
+        uint32_t s = MM_SND.exchange(0);
+        if (g_postOn.load() && s && g_menuSfx.load() && BankReady()) {
+            FindCues();
+            for (int i = 0; i < 3; i++) if (s & (1u << i)) { Play(M.sfxCue[i], false); break; }
+        }
+        return;
+    }
     // build 101: the game asked for its own music while our menu is up: stop it again
     // (it comes back when our menu closes, as before)
     {
