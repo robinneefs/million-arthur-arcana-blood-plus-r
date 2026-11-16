@@ -560,7 +560,7 @@ static void MmSettingsFrame() {
         StRow(dl, X0 + 30, X1 - 30, ys[2], "V-Sync", SR == 2, T.pulse);
         StToggle(dl, X0 + 520, ys[2], g.vsync);
         MmLine(dl, X0 + 50, Y0 + 390, X1 - X0 - 100, 1, MmC(P.acc, 0.6f));
-        MmText(dl, g_fUi, 24, X0 + 50, Y0 + 440, MmC(P.gold), "These take effect the next time you start the game (Borderless: right away, when the game runs windowed).");
+        MmText(dl, g_fUi, 24, X0 + 50, Y0 + 440, MmC(P.gold), "Resolution and display mode change right away. V-Sync changes the next time you start the game.");
         MmText(dl, g_fUi, 21, X0 + 50, Y0 + 476, MmC(P.faint), "They are the game's own display settings: the game's options menu shows the same.");
     } else if (ST.tab == 3) {
         MmSection(dl, X0, Y0, X1, Y1, "ONLINE");
