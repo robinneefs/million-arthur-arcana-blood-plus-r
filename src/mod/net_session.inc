@@ -150,6 +150,15 @@ static struct NetS {
 static char g_netStatus[200] = "";
 static uint64_t g_netPick = 0;          // friend picked with F5
 static char g_netPickName[64] = "";
+// Build 112: a match from a room table (roommatch.inc): who and which side come from the
+// seats, not from rollback.ini; the one-PC test player means the loopback test.
+static struct RoomMatchCfg { bool on = false, loop = false; uint64_t peer = 0; int side = 0; } g_roomCfg;
+enum RmState : int { RM_IDLE = 0, RM_STARTING, RM_PLAYING };
+static struct RoomMatchView {             // read by the room screen (roomui.inc)
+    std::atomic<int> st{RM_IDLE};
+    std::atomic<uint32_t> t0{0};          // GetTickCount when both were READY
+    std::atomic<bool> connected{false};
+} RMV;
 
 static void NetStatus(const char* fmt, ...) {
     char buf[200];
@@ -924,6 +933,11 @@ static void NetStart() {
     N.peerAwaySince = 0;
     if (N.st != NS_OFF) return;
     LoadNetSettings();
+    if (g_roomCfg.on) {
+        g_ncfg.mode = g_roomCfg.loop ? 0 : 2;
+        g_ncfg.wantSide = g_roomCfg.loop ? 0 : g_roomCfg.side + 1;   // the stand-in is always player 2
+        Log("net: room table match: %s, you are player %d", g_roomCfg.loop ? "test player on this PC" : "Steam", g_roomCfg.loop ? 1 : g_roomCfg.side + 1);
+    }
     N = NetS();
     N.codeHash = g_codeHash;
     LARGE_INTEGER q;
@@ -938,7 +952,7 @@ static void NetStart() {
     } else if (g_ncfg.mode == 1) {
         N.tr = net::MakeUdp(g_ncfg.lanPeer, g_ncfg.lanPort, err, sizeof err);
     } else {
-        uint64_t who = g_netPick ? g_netPick : g_ncfg.steamFriend;
+        uint64_t who = g_roomCfg.on ? g_roomCfg.peer : g_netPick ? g_netPick : g_ncfg.steamFriend;
         if (!who && net::SteamOpen(err, sizeof err)) {
             net::Friend f[1];
             if (net::SteamFriends(f, 1) == 1 && f[0].inGame) who = f[0].id;

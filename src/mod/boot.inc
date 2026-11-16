@@ -547,7 +547,7 @@ static void Tick() {
     case B_AFTER:
         if (vt == VT_TITLE) {
             if (!U.visible.load()) { U.visible = true; }
-            if (NetOn()) U.screen = US_SESSION;
+            if (NetOn() && !RoomMatchOn()) U.screen = US_SESSION;   // build 112: a room match goes back to the room
             U.autoOpened = true;
             Log("boot: back on the main menu; overlay open with the after-match choices");
             SetState(B_IDLE);

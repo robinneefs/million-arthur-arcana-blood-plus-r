@@ -307,6 +307,8 @@ FL(GetLobbyOwner, uint64_t, void*, uint64_t)
 FL(IsAPICallCompleted, bool, void*, SteamCall, bool*)
 FL(GetAPICallResult, bool, void*, SteamCall, void*, int, int, bool*)
 FL(GetSteamID, uint64_t, void*)
+FL(SetLobbyMemberData, void, void*, uint64_t, const char*, const char*)
+FL(GetLobbyMemberData, const char*, void*, uint64_t, uint64_t, const char*)
 FL(RegisterCallback, void, void*, int)
 #undef FL
 
@@ -318,7 +320,18 @@ static struct {
     bool changeReq = false;
     char say[8][200];
     int nSay = 0;
+    // build 112: my member data to write (key -> value, newest wins)
+    char dk[8][8], dv[8][64];
+    int nData = 0;
 } RQ;
+static bool g_standIn = false;
+static int g_standInSeat = -1;
+static void QueueData(const char* k, const char* v) {
+    // caller holds g_rlock
+    for (int i = 0; i < RQ.nData; i++)
+        if (!strcmp(RQ.dk[i], k)) { snprintf(RQ.dv[i], sizeof RQ.dv[i], "%s", v); return; }
+    if (RQ.nData < 8) { snprintf(RQ.dk[RQ.nData], 8, "%s", k); snprintf(RQ.dv[RQ.nData], 64, "%s", v); RQ.nData++; }
+}
 // state (game thread; copied out under g_rlock)
 static RoomView RV;
 static SteamCall g_call = 0;
@@ -451,6 +464,8 @@ static bool RoomsOpen() {
     GP(pIsAPICallCompleted, "SteamAPI_ISteamUtils_IsAPICallCompleted")
     GP(pGetAPICallResult, "SteamAPI_ISteamUtils_GetAPICallResult")
     GP(pGetSteamID, "SteamAPI_ISteamUser_GetSteamID")
+    GP(pSetLobbyMemberData, "SteamAPI_ISteamMatchmaking_SetLobbyMemberData")
+    GP(pGetLobbyMemberData, "SteamAPI_ISteamMatchmaking_GetLobbyMemberData")
     GP(pRegisterCallback, "SteamAPI_RegisterCallback")
 #undef GP
     if (!ok) { Log("room: Steam lobby functions not found (user %p utils %p matchmaking %p)", g_user, g_utils, g_mm); g_roomsDead = true; return false; }
@@ -480,6 +495,70 @@ static int DataInt(uint64_t lobby, const char* k, int def) {
     const char* v = pGetLobbyData(g_mm, lobby, k);
     return v && *v ? atoi(v) : def;
 }
+// Build 112: what each member shows the room (lobby member data, written by that member only):
+//   seat  -1 or table * 2 + side      rdy  1 = READY at the table
+//   play  1 = in a match              sc   "game,wins1P,wins2P" of the set being played
+//   su    "chara,colour,stage,a1,a2,a3" (My setup; 255 = random)
+static void ReadMember(uint64_t lobby, RoomMember& m) {
+    auto get = [&](const char* k) { const char* v = pGetLobbyMemberData(g_mm, lobby, m.id, k); return v ? v : ""; };
+    const char* seat = get("seat");
+    m.seat = *seat ? atoi(seat) : -1;
+    m.ready = atoi(get("rdy")) == 1;
+    m.playing = atoi(get("play")) == 1;
+    m.standin = false;
+    int v[6];
+    m.hasSetup = sscanf(get("su"), "%d,%d,%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6;
+    if (m.hasSetup) { m.chara = (uint8_t)v[0]; m.color = (uint8_t)v[1]; m.stage = (uint8_t)v[2]; for (int k = 0; k < 3; k++) m.assist[k] = (uint8_t)v[3 + k]; }
+    m.game = 0; m.wins[0] = m.wins[1] = 0;
+    sscanf(get("sc"), "%d,%d,%d", &m.game, &m.wins[0], &m.wins[1]);
+}
+// Seats: a seat beyond the room size counts as standing; when two members claim the same
+// seat (both sat at the same moment), the lower Steam id keeps it and the other stands up.
+// Then the one-PC test player sits across from you (if asked for).
+static void SeatRules() {
+    // caller holds g_rlock
+    int seats = (RV.set.size / 2) * 2;
+    if (seats < 2) seats = 2;
+    RV.mySeat = -1; RV.myReady = false;
+    for (int i = 0; i < RV.nMembers; i++) {
+        RoomMember& m = RV.members[i];
+        if (m.seat >= seats || m.seat < -1) m.seat = -1;
+        for (int j = 0; j < RV.nMembers && m.seat >= 0; j++)
+            if (j != i && RV.members[j].seat == m.seat && RV.members[j].id < m.id) {
+                static uint32_t lastClash = 0;
+                if (m.me && GetTickCount() - lastClash > 2000) {
+                    lastClash = GetTickCount();
+                    QueueData("seat", "-1"); QueueData("rdy", "0");
+                    ChatAdd(g_me, "", "Someone else took that seat", true);
+                    Log("room: seat %d was taken by %s at the same time", m.seat, RV.members[j].name);
+                }
+                m.seat = -1;
+            }
+        if (m.seat < 0) m.ready = false;
+        if (m.me) { RV.mySeat = m.seat; RV.myReady = m.ready; }
+    }
+    if (!g_standIn || RV.nMembers >= ROOM_MAX_MEMBERS) return;
+    const RoomMember* me = nullptr;
+    for (int i = 0; i < RV.nMembers; i++) if (RV.members[i].me) me = &RV.members[i];
+    if (!me) return;
+    // keeps its seat while you stay at that table; follows you to another table
+    if (me->seat < 0 || (g_standInSeat >= 0 && g_standInSeat / 2 != me->seat / 2) || g_standInSeat == me->seat) g_standInSeat = -1;
+    if (me->seat >= 0 && g_standInSeat < 0) {
+        bool taken = false;
+        for (int i = 0; i < RV.nMembers; i++) taken |= RV.members[i].seat == (me->seat ^ 1);
+        if (!taken) g_standInSeat = me->seat ^ 1;
+    }
+    RoomMember& s = RV.members[RV.nMembers++];
+    s = RoomMember{};
+    s.id = ROOM_STANDIN_ID;
+    snprintf(s.name, sizeof s.name, "Stand-in");
+    s.standin = true;
+    s.seat = g_standInSeat;
+    s.ready = s.seat >= 0 && me->ready;          // copies you
+    s.playing = s.seat >= 0 && me->playing;
+    s.hasSetup = true; s.chara = 2; s.color = 3; s.stage = 0xFF; s.assist[0] = 5; s.assist[1] = 6; s.assist[2] = 16;
+    s.game = me->game; s.wins[0] = me->wins[0]; s.wins[1] = me->wins[1];
+}
 static void ReadRoom(uint64_t lobby) {
     // caller holds g_rlock
     const char* nm = pGetLobbyData(g_mm, lobby, "name");
@@ -501,6 +580,7 @@ static void ReadRoom(uint64_t lobby) {
         m.host = id == RV.owner;
         m.me = id == g_me;
         snprintf(m.name, sizeof m.name, "%s", SteamFriendName(id));
+        ReadMember(lobby, m);
     }
     // who came and went, for the chat
     if (g_nLast > 0 || n > 0) {
@@ -518,6 +598,7 @@ static void ReadRoom(uint64_t lobby) {
     memcpy(g_lastMembers, now, sizeof(uint64_t) * n);
     g_nLast = n;
     RV.nMembers = n;
+    SeatRules();
 }
 static void EnterRoom(uint64_t lobby, int build, bool created) {
     // caller holds g_rlock
@@ -527,6 +608,10 @@ static void EnterRoom(uint64_t lobby, int build, bool created) {
     RV.nChat = 0;
     g_nLast = 0;
     if (created) WriteRoomData(lobby, RQ.set, build);
+    // build 112: start standing, not ready, not playing (the room tick writes it next frame;
+    // the setup "su" is kept in the queue if it was set before)
+    QueueData("seat", "-1"); QueueData("rdy", "0"); QueueData("play", "0"); QueueData("sc", "");
+    g_standInSeat = -1;
     ReadRoom(lobby);
     char s[96];
     snprintf(s, sizeof s, created ? "You opened the room" : "You joined the room");
@@ -612,6 +697,11 @@ void RoomTick(int build) {
     if (RV.id && RV.state == ROOM_IN) {
         for (int i = 0; i < RQ.nSay; i++) pSendLobbyChatMsg(g_mm, RV.id, RQ.say[i], (int)strlen(RQ.say[i]) + 1);
         RQ.nSay = 0;
+        for (int i = 0; i < RQ.nData; i++) {
+            pSetLobbyMemberData(g_mm, RV.id, RQ.dk[i], RQ.dv[i]);
+            if (strcmp(RQ.dk[i], "sc") && strcmp(RQ.dk[i], "su")) Log("room: my %s = %s", RQ.dk[i], RQ.dv[i]);
+        }
+        RQ.nData = 0;
         if (RQ.changeReq && RV.owner == g_me) {
             RoomSettings s = RQ.change;
             snprintf(s.name, sizeof s.name, "%s", RV.set.name);
@@ -689,5 +779,19 @@ void RoomInviteFriend(uint64_t f) { RQLOCK RQ.invite = f; }
 void RoomRefreshFriends() { RQLOCK RQ.friends = true; }
 void RoomDropInvite() { RQLOCK RV.haveInvite = false; }
 void RoomChange(const RoomSettings& s) { RQLOCK RQ.change = s; RQ.changeReq = true; }
+// build 112
+void RoomSit(int seat) {
+    RQLOCK
+    char v[8];
+    snprintf(v, sizeof v, "%d", seat < 0 ? -1 : seat);
+    QueueData("seat", v);
+    QueueData("rdy", "0");
+    RV.mySeat = seat < 0 ? -1 : seat;   // shows at once (the next room tick reads it back)
+    RV.myReady = false;
+}
+void RoomSetReady(bool on) { RQLOCK QueueData("rdy", on ? "1" : "0"); RV.myReady = on && RV.mySeat >= 0; }
+void RoomSetMyData(const char* key, const char* val) { RQLOCK QueueData(key, val); }
+void RoomStandIn(bool on) { RQLOCK g_standIn = on; }
+void RoomSystemLine(const char* text) { RQLOCK ChatAdd(g_me, "", text, true); }
 #undef RQLOCK
 } // namespace net

@@ -597,6 +597,38 @@ static void SuPanel(ImDrawList* dl, float x0, float y0, float in) {
     MmText(dl, g_fUiBold, 21, x + 90, y + 124, MmC(P.text, in), SU.p[SU.inUse].name);
     for (int k = 0; k < 3; k++) MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), x + k * 88, y + 142, 82, 38, MmRGBA(255, 255, 255, in));
 }
+// build 112: My setup as one row (the room's MY MATCH SETTINGS bar)
+static int SuPortraitOf(int chara) { return chara >= 0 && chara < SU_NCHAR ? SU_PORTRAIT[chara] : 48; }
+static void SuRoomPanel(ImDrawList* dl, float x0, float y0, float x1, float y1, float in) {
+    const MmPal& P = MmP();
+    SuLoad();
+    bool rnd = SU.chara == SU_RANDOM;
+    MmImg(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[SU.chara], x0 + 16, y0 + 12, 70, 102, MmRGBA(255, 255, 255, in));
+    float cy = (y0 + y1) / 2;
+    MmText(dl, g_fMenu, 11, x0 + 102, cy - 20, MmC(P.faint, in), "CHARACTER");
+    const char* nm = rnd ? "Random" : SU_CHARS[SU.chara];
+    MmText(dl, g_fUiBold, strlen(nm) > 16 ? 19.0f : 25.0f, x0 + 102, cy + 10, MmC(P.text, in), nm);
+    float x = x0 + 330;
+    MmText(dl, g_fMenu, 11, x, cy - 20, MmC(P.faint, in), "COLOUR");
+    dl->AddRectFilled(CP(x, cy - 2), CP(x + 26, cy + 24), MmC(P.bgTop, in), CV(4));
+    if (!rnd) SuHead(dl, SU.chara, SU.color, x, cy - 2, 26, 26);
+    dl->AddRect(CP(x, cy - 2), CP(x + 26, cy + 24), MmRGBA(255, 210, 110, in), CV(4), 0, CV(2));
+    char c[24]; snprintf(c, sizeof c, "Colour %d", SU.color + 1);
+    MmText(dl, g_fUi, 21, x + 36, cy + 11, MmC(P.dim, in), c);
+    x = x0 + 470;
+    MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, x, cy - 30, 100, 64, MmRGBA(255, 255, 255, in));
+    dl->AddRect(CP(x, cy - 30), CP(x + 100, cy + 34), MmRGBA(214, 170, 82, in), 0, 0, CV(1));
+    MmText(dl, g_fMenu, 11, x + 114, cy - 20, MmC(P.faint, in), "STAGE");
+    char st[24];
+    if (SU.stage == SU_RANDOM) snprintf(st, sizeof st, "Random"); else snprintf(st, sizeof st, "Stage %02d", SU.stage + 1);
+    MmText(dl, g_fUiBold, 25, x + 114, cy + 10, MmC(P.text, in), st);
+    x = x0 + 700;
+    MmText(dl, g_fMenu, 11, x, cy - 26, MmC(P.faint, in), "SUPPORT KNIGHTS");
+    MmText(dl, g_fUiBold, 21, x, cy + 0, MmC(P.text, in), SU.p[SU.inUse].name);
+    for (int k = 0; k < 3; k++) MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), x + k * 62, cy + 16, 58, 27, MmRGBA(255, 255, 255, in));
+    MmPadButton(dl, x1 - 104, cy - 18, 'Y', MmRGBA(210, 170, 20, in));
+    MmText(dl, g_fMenu, 14, x1 - 60, cy, MmC(P.text, in), "Edit");
+}
 // open the editor from the main menu
 static void SuOpen() {
     SuLoad();
