@@ -204,7 +204,7 @@ static void MmSeatDraw(ImDrawList* dl, float x, float y, const MmSeat& s, int si
     // 1P red, 2P gold badge on the top left corner
     MmRgb bc = side == 1 ? P.acc : P.gold;
     // build 114: the 1P / 2P badge sits centred on the top edge, above the seat cursor (friend test)
-    float bx = x + pw / 2 - 27, by = y - 26;
+    float bx = x + pw / 2 - 27, by = y - 14;   // build 115b: centred on the portrait's top border
     dl->AddRectFilled(CP(bx, by), CP(bx + 54, by + 28), MmC(bc), CV(5));
     dl->AddRect(CP(bx, by), CP(bx + 54, by + 28), MmC(P.text), CV(5), 0, CV(1.5f));
     MmText(dl, g_fMenu, 13, bx + 27, by + 14, MmC(side == 1 ? P.text : P.ink), side == 1 ? "1P" : "2P", 1, 0, 0, 0.5f);
