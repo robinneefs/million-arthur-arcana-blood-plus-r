@@ -1,8 +1,9 @@
-// Arcana Blood rollback launcher (dev build for step 2).
+// Arcana Blood +R launcher.
 //
 // Finds the Steam install of Million Arthur: Arcana Blood, starts the game,
 // and loads arcana_rollback.dll (sitting next to this exe) into it.
-// It never writes anything into the game folder.
+// It never writes anything into the game folder. Before that it looks for a newer
+// version of the mod on GitHub and asks before installing it (update.inc).
 //
 // Usage:
 //   arcana_launcher.exe            start the game with the mod
@@ -178,7 +179,7 @@ int wmain(int argc, wchar_t** argv) {
         for (int i = 0; i < 600 && !(pid = FindGamePid(0)); i++) Sleep(100);
         if (!pid) { Say(L"Game not found."); return Finish(1); }
         bool ok = InjectPid(pid, dll);
-        Say(ok ? L"Mod loaded. Check the game window title." : L"Could not load the mod.");
+        Say(ok ? L"Mod loaded." : L"Could not load the mod.");
         return Finish(ok ? 0 : 1);
     }
 
@@ -220,8 +221,9 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     if (!ok) { Say(L"Could not load the mod into the game."); return Finish(1); }
-    Say(L"Mod loaded. The game window title shows the mod status.");
-    Say(L"Hotkeys in game: F9 = profile, F10 = sync test on/off, F11 = rewind depth.");
-    Say(L"Log files are written next to this launcher.");
-    return Finish(0);
+    Say(L"Mod loaded. Have fun!");
+    Say(L"This window closes by itself in a few seconds.");
+    Say(L"If something goes wrong: Help > Pack logs in the mod's main menu.");
+    Sleep(6000);
+    return 0;
 }

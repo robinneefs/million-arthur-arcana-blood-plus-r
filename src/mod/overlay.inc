@@ -40,7 +40,6 @@ static const uint32_t VT_TITLE = 0x008D2CBC;     // CMLTitle
 enum : uint32_t { PB_UP = 0x1, PB_DOWN = 0x2, PB_LEFT = 0x4, PB_RIGHT = 0x8, PB_START = 0x10, PB_BACK = 0x20,
                   PB_LB = 0x100, PB_RB = 0x200, PB_A = 0x1000, PB_B = 0x2000, PB_X = 0x4000, PB_Y = 0x8000 };
 
-enum UiScreen { US_CONNECT, US_SESSION, US_CONTROLS };
 static struct Ui {
     std::atomic<bool> visible{false};
     std::atomic<bool> capture{false};     // the overlay takes the input this frame (set on the game thread)
@@ -52,24 +51,11 @@ static struct Ui {
     int titleStep = 0;                    // build 58: 0 title screen, 1 button down there, 2 released (counting), 3 opened
     int titleWait = 0;
     uint32_t anyRaw = 0;                  // every pad and the keyboard slots, this frame
-    int screen = US_CONNECT;
-    int backTo = US_CONNECT;              // where Controls returns to
-    // connect settings (overlay thread; copied to the session on Connect)
-    int mode = 0;                         // 0 loopback, 1 LAN, 2 Steam
-    char lanPeer[64] = "auto";
-    int side = 0;                         // 0 auto, 1 player 1, 2 player 2
-    char name[32] = "";
-    int controller = -1;                  // -1 = the game's player 1 controller, else pad 0-9
-    // requests for the game thread
-    std::atomic<int> cmd{0};              // 1 connect, 2 disconnect/cancel, 3 refresh friends
-    // Steam friends (filled on the game thread)
-    net::Friend friends[64];
-    int nFriends = 0, pickFriend = -1;
-    char friendErr[160] = "";
+    char name[32] = "";                   // fallback player name (no Steam name)
+    int controller = -1;                  // [ui] controller: -1 = automatic (build 114: the pad used in the menus, follows a switch), else pad 0-9
     // pads (game thread writes, overlay reads)
     uint32_t padRaw[10] = {};
     uint32_t navBits = 0;
-    bool detect = false, detectArmed = false;
     uint32_t screenVt = 0;
     bool netOn = false, netHello = false;
     std::atomic<int> pgReq{0};            // build 91: 3 open our main menu (button on the overlay's first screen)
@@ -86,12 +72,6 @@ static void UiLoadSettings() {
     wchar_t ini[MAX_PATH];
     _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
     wchar_t w[64];
-    GetPrivateProfileStringW(L"net", L"mode", L"loopback", w, 64, ini);
-    U.mode = _wcsicmp(w, L"lan") == 0 ? 1 : _wcsicmp(w, L"steam") == 0 ? 2 : 0;
-    GetPrivateProfileStringW(L"net", L"lan_peer", L"auto", w, 64, ini);
-    snprintf(U.lanPeer, sizeof U.lanPeer, "%ls", w);
-    U.side = GetPrivateProfileIntW(L"net", L"side", 0, ini);
-    if (U.side < 0 || U.side > 2) U.side = 0;
     GetPrivateProfileStringW(L"ui", L"name", L"", w, 64, ini);
     snprintf(U.name, sizeof U.name, "%ls", w);
     if (!U.name[0]) {
@@ -103,36 +83,14 @@ static void UiLoadSettings() {
     U.controller = _wcsicmp(w, L"auto") == 0 ? -1 : _wtoi(w);
     if (U.controller < -1 || U.controller > 9) U.controller = -1;
 }
-static void UiIniWrite(const wchar_t* sec, const wchar_t* key, const char* val) {
-    wchar_t ini[MAX_PATH], w[96];
-    _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
-    _snwprintf(w, 96, L"%hs", val);
-    WritePrivateProfileStringW(sec, key, w, ini);
-}
-static void UiSaveConnectSettings() {
-    static const char* modes[] = {"loopback", "lan", "steam"};
-    char side[8];
-    snprintf(side, sizeof side, "%d", U.side);
-    UiIniWrite(L"net", L"mode", modes[U.mode]);
-    UiIniWrite(L"net", L"lan_peer", U.lanPeer[0] ? U.lanPeer : "auto");
-    UiIniWrite(L"net", L"side", side);
-    UiIniWrite(L"ui", L"name", U.name);
-}
-static void UiSaveController() {
-    char v[8];
-    if (U.controller < 0) snprintf(v, sizeof v, "auto"); else snprintf(v, sizeof v, "%d", U.controller);
-    UiIniWrite(L"ui", L"controller", v);
-}
-
 // Called by NetBecomeOn (game thread) when a session starts.
 static int g_lastMenuPad = -1;   // build 114: the controller that last pressed a button in our menus
 static void UiSessionStarted() {
     g_padFollow = U.controller < 0;
     const char* how = "the game's player 1 controller";
-    if (U.controller >= 0) { N.localDev = (uint32_t)U.controller; how = "picked in the overlay"; }
+    if (U.controller >= 0) { N.localDev = (uint32_t)U.controller; how = "set in rollback.ini"; }
     else if (g_lastMenuPad >= 0) { N.localDev = (uint32_t)g_lastMenuPad; how = "the one used in the menus"; }
     Log("ui: connected; this PC's player uses controller slot %u (%s)", N.localDev, how);
-    U.screen = US_SESSION;
 }
 
 // ---- game thread ---------------------------------------------------------------
@@ -232,15 +190,14 @@ static void UiGameThreadTick(bool focused) {
     U.netOn = N.st == NS_ON;
     U.netHello = N.st == NS_HELLO;
     bool inSynced = NetOn() && N.syncedType;
-    // F1, or Back + Start on a controller: show / hide
+    // F1 / F3, or Back + Start on a controller, open / close our main menu; not during fights or tests
     static bool comboWas = false;
     bool combo = (U.navBits & (PB_BACK | PB_START)) == (PB_BACK | PB_START);
-    bool toggle = (KeyPressed(VK_F1) && focused) || (combo && !comboWas);
+    bool toggle = ((KeyPressed(VK_F1) || KeyPressed(VK_F3)) && focused) || (combo && !comboWas);
     comboWas = combo;
-    // F3 (or the overlay's button) opens / closes our main menu; not during fights or tests
     {
         int req = U.pgReq.exchange(0);
-        bool f3 = KeyPressed(VK_F3) && focused;
+        bool f3 = toggle;
         bool wantMm = req == 3 || f3;
         bool can = !inSynced && g_mode == Mode::Idle && !g_auto;
         // build 101: our main menu is the game's front end. It opens by itself on the game's
@@ -276,13 +233,6 @@ static void UiGameThreadTick(bool focused) {
         net::RoomTick((int)NET_BUILD);   // build 100: Steam rooms (lobbies)
         RoomMatchTick(vt);               // build 112: matches from the room's tables
     }
-    if (toggle) {
-        bool v = !U.visible.load();
-        U.visible = v;
-        if (!v) U.drain = true;
-        Log("ui: overlay %s (pictures so far %u)", v ? "shown" : "hidden", g_presents);
-        if (v) g_drawLog = 3;
-    }
     // (build 58-100: opened by itself after a press on the "press start" picture; build 101
     // opens our main menu straight away instead, above)
     // the game's own synced screens (old menu path) and tests: overlay steps aside
@@ -293,29 +243,6 @@ static void UiGameThreadTick(bool focused) {
     g_dcWaitMs = (N.st == NS_ON && N.syncedType) ? GetTickCount() - N.lastRecv : 0;
     g_dcAwayMs = (N.st == NS_ON && N.peerAwaySince) ? GetTickCount() - N.peerAwaySince : 0;   // build 111
     if (g_closeReq.load() && N.st != NS_OFF) { g_byeClosing = true; NetEnd("you closed the game"); }   // build 111: asked by the window thread
-    // requests
-    int c = U.cmd.exchange(0);
-    if (c == 1 && N.st == NS_OFF) {
-        if (g_mode != Mode::Idle || g_auto) SetStatus("stop the test first (F7 / F8), then connect");
-        else {
-            snprintf(g_uiName, sizeof g_uiName, "%s", net::SteamMyName()[0] ? net::SteamMyName() : U.name);
-            if (U.mode == 2 && U.pickFriend >= 0 && U.pickFriend < U.nFriends) {
-                g_netPick = U.friends[U.pickFriend].id;
-                snprintf(g_netPickName, sizeof g_netPickName, "%s", U.friends[U.pickFriend].name);
-            }
-            Log("ui: connect pressed (mode %d, other PC \"%s\", side %d, name \"%s\")", U.mode, U.lanPeer, U.side, U.name);
-            NetStart();
-        }
-    } else if (c == 2 && N.st != NS_OFF) {
-        NetEnd("disconnect pressed");
-    } else if (c == 3) {
-        char err[160] = "";
-        if (!net::SteamOpen(err, sizeof err)) { snprintf(U.friendErr, sizeof U.friendErr, "Steam: %s", err); U.nFriends = 0; }
-        else { U.nFriends = net::SteamFriends(U.friends, 64); U.friendErr[0] = 0; if (!U.nFriends) snprintf(U.friendErr, sizeof U.friendErr, "no Steam friends online"); }
-        U.pickFriend = U.nFriends ? 0 : -1;
-    }
-    if (N.st == NS_OFF && U.screen == US_SESSION) U.screen = US_CONNECT;
-    if (N.st == NS_OFF && U.backTo == US_SESSION) U.backTo = US_CONNECT;
     if (NetOn()) {
         if (U.controller >= 0) N.localDev = (uint32_t)U.controller;
         // player 1's input delay, between screens only
@@ -342,17 +269,6 @@ static void UiAfterGameInput() {
         if (i < 8) { if (r & ~prev[i]) g_lastMenuPad = (int)i; prev[i] = r; }   // build 114
     }
     U.navBits = nav;
-    if (U.detect) {
-        if (!U.detectArmed) { if (!any) U.detectArmed = true; }
-        else for (uint32_t i = 0; i < addr::PAD_COUNT; i++)
-            if (U.padRaw[i]) {
-                U.controller = (int)i;
-                U.detect = U.detectArmed = false;
-                UiSaveController();
-                Log("ui: controller picked by pressing a button: slot %u", i);
-                break;
-            }
-    }
     U.anyRaw = any;
     bool block = U.capture.load();
     if (!block && U.drain.load()) {
@@ -609,412 +525,8 @@ static bool UiInit(IDirect3DDevice9* dev) {
 
 #endif // UI_HARNESS
 
-// ---- screens ---------------------------------------------------------------------
-static void UiDisabled(bool on) {
-    ImGui::PushItemFlag(ImGuiItemFlags_Disabled, on);
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (on ? 0.45f : 1.0f));
-}
-static void UiDisabledEnd() { ImGui::PopStyleVar(); ImGui::PopItemFlag(); }
-static bool UiBigButton(const char* label, bool accent = false, float w = 0) {
-    if (accent) {
-        ImGui::PushStyleColor(ImGuiCol_Button, theme::Accent());
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::AccentHover());
-        ImGui::PushStyleColor(ImGuiCol_Text, theme::rgba(20, 20, 30));
-    }
-    bool r = ImGui::Button(label, ImVec2(w, 0));
-    if (accent) ImGui::PopStyleColor(3);
-    return r;
-}
-static void UiNote(const char* t) {
-    ImGui::PushStyleColor(ImGuiCol_Text, theme::TextDim());
-    ImGui::TextWrapped("%s", t);
-    ImGui::PopStyleColor();
-}
-static void UiHeading(const char* t) {
-    ImGui::PushFont(g_fTitle);
-    ImGui::TextColored(theme::Accent(), "%s", t);
-    ImGui::PopFont();
-}
-static void UiStatusLine() {
-    char ns[200], gs[256];
-    EnterCriticalSection(&g_statusLock);
-    snprintf(ns, sizeof ns, "%s", g_netStatus);
-    snprintf(gs, sizeof gs, "%s", g_status);
-    LeaveCriticalSection(&g_statusLock);
-    ImGui::PushFont(g_fSmall);
-    ImGui::TextColored(theme::TextDim(), "%s", ns[0] ? ns : gs);
-    ImGui::PopFont();
-}
-
-static const char* const PAD_NAMES[10] = {"Xbox controller 1", "Xbox controller 2", "Xbox controller 3", "Xbox controller 4",
-                                          "Other controller 1", "Other controller 2", "Other controller 3", "Other controller 4",
-                                          "Keyboard (left side)", "Keyboard (right side)"};
-
-static void UiConnectScreen() {
-    UiHeading("Play online");
-    ImGui::Spacing();
-    bool busy = U.netHello;
-    UiDisabled(busy);
-    ImGui::Text("Your name");
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
-    ImGui::InputText("##name", U.name, sizeof U.name);
-    ImGui::Spacing();
-    ImGui::Text("Connect through");
-    ImGui::RadioButton("Home network (LAN)", &U.mode, 1);
-    ImGui::SameLine();
-    ImGui::RadioButton("Steam friend", &U.mode, 2);
-    ImGui::SameLine();
-    ImGui::RadioButton("Test on this PC (stand-in player)", &U.mode, 0);
-    if (U.mode == 1) {
-        ImGui::Text("Other PC's address");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
-        ImGui::InputText("##peer", U.lanPeer, sizeof U.lanPeer);
-        ImGui::SameLine();
-        ImGui::TextColored(theme::TextDim(), "\"auto\" finds it on your network");
-    } else if (U.mode == 2) {
-        if (ImGui::Button("Refresh friend list")) U.cmd = 3;
-        if (U.friendErr[0]) ImGui::TextColored(theme::Bad(), "%s", U.friendErr);
-        ImGui::BeginChild("friends", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 5.5f), true);
-        for (int i = 0; i < U.nFriends; i++) {
-            char l[96];
-            snprintf(l, sizeof l, "%s%s##f%d", U.friends[i].name, U.friends[i].inGame ? "  (in this game)" : "", i);
-            if (ImGui::Selectable(l, U.pickFriend == i)) U.pickFriend = i;
-        }
-        if (!U.nFriends && !U.friendErr[0]) ImGui::TextColored(theme::TextDim(), "Press Refresh to see who is online.");
-        ImGui::EndChild();
-    } else {
-        UiNote("A stand-in on this PC plays player 2 and copies your choices.");
-    }
-    ImGui::Text("Play as");
-    ImGui::RadioButton("Decide for me", &U.side, 0);
-    ImGui::SameLine();
-    ImGui::RadioButton("Player 1 (host)", &U.side, 1);
-    ImGui::SameLine();
-    ImGui::RadioButton("Player 2", &U.side, 2);
-    UiDisabledEnd();
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    if (!busy) {
-        bool can = U.mode != 2 || U.pickFriend >= 0;
-        UiDisabled(!can);
-        if (UiBigButton("Connect", true)) { UiSaveConnectSettings(); U.cmd = 1; }
-        UiDisabledEnd();
-    } else {
-        ImGui::Text("Connecting...");
-        ImGui::SameLine();
-        if (UiBigButton("Cancel")) U.cmd = 2;
-    }
-    ImGui::SameLine();
-    if (UiBigButton("Controls")) { U.backTo = US_CONNECT; U.screen = US_CONTROLS; }
-    ImGui::SameLine();
-    if (UiBigButton("Main menu (F3)")) U.pgReq = 3;
-}
-
-static int UiSuggestDelay() {
-    int ms = (int)N.rtt / 2;
-    int d = (ms * 60 + 999) / 1000 + 1;
-    return d < 1 ? 1 : d > 8 ? 8 : d;
-}
-
-static void UiPlayerCard(int side, const LbSide& s, bool present, bool mine) {
-    ImGui::PushStyleColor(ImGuiCol_Text, side == 0 ? theme::P1() : theme::P2());
-    ImGui::PushFont(g_fTitle);
-    ImGui::Text("P%d", side + 1);
-    ImGui::PopFont();
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::BeginGroup();
-    ImGui::Text("%s%s", present ? (s.name[0] ? s.name : "player") : "waiting...", mine ? "  (you)" : "");
-    if (present) {
-        if (s.phase == LP_LOBBY) ImGui::TextColored(s.ready ? theme::Good() : theme::TextDim(), "%s", s.ready ? "Ready" : "Not ready");
-        else ImGui::TextColored(theme::TextDim(), "in %s", LB_PHASE_NAME[s.phase]);
-    }
-    ImGui::EndGroup();
-}
-
-static void UiLobbyPhase(LbSide& me, const LbSide& them, bool host) {
-    UiHeading("Lobby");
-    ImGui::Spacing();
-    if (ImGui::BeginTable("players", 2, ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableNextColumn();
-        if (N.side == 0) UiPlayerCard(0, me, true, true); else UiPlayerCard(0, them, LB.haveThem, false);
-        ImGui::TableNextColumn();
-        if (N.side == 1) UiPlayerCard(1, me, true, true); else UiPlayerCard(1, them, LB.haveThem, false);
-        ImGui::EndTable();
-    }
-    ImGui::Separator();
-    ImGui::Text("Ping %u ms   |   mod build %u on both PCs", N.rtt, NET_BUILD);
-    int delay = me.delay;
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Input delay");
-    ImGui::SameLine();
-    if (host) {
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
-        if (ImGui::SliderInt("##delay", &delay, 0, 8, "%d frames")) { me.delay = (uint8_t)delay; LbChanged(); }
-        ImGui::SameLine();
-        ImGui::TextColored(theme::TextDim(), "suggested %d for this ping", UiSuggestDelay());
-    } else {
-        ImGui::Text("%d frames", delay);
-        ImGui::SameLine();
-        ImGui::TextColored(theme::TextDim(), "(player 1 sets this)");
-    }
-    static const char* const roundsNames[] = {"1", "2", "3", "4", "5"};
-    int rounds = me.rounds >= 1 && me.rounds <= 5 ? me.rounds - 1 : 1;
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Rounds to win");
-    ImGui::SameLine();
-    if (host) {
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 4);
-        if (ImGui::Combo("##rounds", &rounds, roundsNames, 5)) { me.rounds = (uint8_t)(rounds + 1); LbChanged(); }
-    } else ImGui::Text("%d", rounds + 1);
-    const char* const* timerNames = LB_TIMER_NAMES;
-    int timer = me.timer < LB_TIMERS ? me.timer : 2;
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Round timer");
-    ImGui::SameLine();
-    if (host) {
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11);
-        if (ImGui::Combo("##timer", &timer, timerNames, LB_TIMERS)) { me.timer = (uint8_t)timer; LbChanged(); }
-    } else ImGui::Text("%s", timerNames[timer]);
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    if (UiBigButton(me.ready ? "Not ready" : "Ready", !me.ready)) { me.ready = !me.ready; LbChanged(); }
-    ImGui::SameLine();
-    if (UiBigButton("Controls")) { U.backTo = US_SESSION; U.screen = US_CONTROLS; }
-    ImGui::SameLine();
-    if (UiBigButton("Disconnect")) U.cmd = 2;
-    if (me.ready && !(LB.haveThem && them.ready)) ImGui::TextColored(theme::TextDim(), "Waiting for the other player to be ready...");
-}
-
-static bool UiPickCombo(const char* id, uint8_t* v, int count, bool allowRandom, const char* (*name)(uint8_t), bool enabled) {
-    bool changed = false;
-    UiDisabled(!enabled);
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo(id, name(*v))) {
-        if (allowRandom && ImGui::Selectable("Random", *v == LB_RANDOM)) { *v = LB_RANDOM; changed = true; }
-        for (int i = 0; i < count; i++) {
-            if (ImGui::Selectable(name((uint8_t)i), *v == i)) { *v = (uint8_t)i; changed = true; }
-            if (*v == i) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    UiDisabledEnd();
-    return changed;
-}
-#define UiColorName LbColorName
-#define UiAssistName LbAssistName
-
-static void UiSideColumn(int side, LbSide& s, bool mine, bool present) {
-    ImGui::PushStyleColor(ImGuiCol_Text, side == 0 ? theme::P1() : theme::P2());
-    ImGui::Text("PLAYER %d%s", side + 1, mine ? "  (you)" : "");
-    ImGui::PopStyleColor();
-    ImGui::Text("%s", present ? s.name : "waiting...");
-    if (!present) return;
-    bool ed = mine && !s.locked;
-    char id[32];
-    ImGui::TextColored(theme::TextDim(), "Character");
-    snprintf(id, sizeof id, "##ch%d", side);
-    if (UiPickCombo(id, &s.p.chara, LbCharCount(), true, LbCharName, ed)) {   // build 70: boss left out (crash in a rollback, test 69)
-        if (s.p.color >= LbColorCount(s.p.chara)) s.p.color = 0;
-        LbChanged();
-    }
-    ImGui::TextColored(theme::TextDim(), "Colour");
-    snprintf(id, sizeof id, "##co%d", side);
-    if (UiPickCombo(id, &s.p.color, s.p.chara == LB_RANDOM ? LB_COLORS : LbColorCount(s.p.chara), false, UiColorName, ed)) LbChanged();
-    static const char* const slot[3] = {"Support Knight (QCB + L)", "Support Knight (QCB + M)", "Support Knight (QCB + H)"};
-    for (int k = 0; k < 3; k++) {
-        ImGui::TextColored(theme::TextDim(), "%s", slot[k]);
-        snprintf(id, sizeof id, "##as%d_%d", side, k);
-        if (UiPickCombo(id, &s.p.assist[k], LB_ASSISTS, false, UiAssistName, ed)) LbChanged();
-    }
-    ImGui::TextColored(theme::TextDim(), "Stage wish");
-    snprintf(id, sizeof id, "##st%d", side);
-    if (UiPickCombo(id, &s.p.stage, LB_STAGES, true, LbStageName, ed)) LbChanged();
-    ImGui::Spacing();
-    if (s.locked) ImGui::TextColored(theme::Good(), "LOCKED IN");
-    else ImGui::TextColored(theme::TextDim(), "choosing...");
-}
-
-static void UiSetupPhase(LbSide& me, LbSide& them, bool host) {
-    UiHeading("Match setup");
-    UiNote("If the two stage wishes differ, one of them is picked at random.");
-    ImGui::Spacing();
-    if (ImGui::BeginTable("sides", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
-        ImGui::TableNextColumn();
-        if (N.side == 0) UiSideColumn(0, me, true, true); else UiSideColumn(0, them, false, LB.haveThem);
-        ImGui::TableNextColumn();
-        if (N.side == 1) UiSideColumn(1, me, true, true); else UiSideColumn(1, them, false, LB.haveThem);
-        ImGui::EndTable();
-    }
-    ImGui::Separator();
-    ImGui::Spacing();
-    bool bothLocked = me.locked && them.locked && them.phase == LP_SETUP;
-    if (!me.locked) { if (UiBigButton("Lock in", true)) { me.locked = true; LbChanged(); } }
-    else if (!bothLocked) { if (UiBigButton("Change picks")) { me.locked = false; LbChanged(); } }
-    if (bothLocked) {
-        if (host) {
-            float left = LB.startAt ? (int32_t)(LB.startAt - GetTickCount()) / 1000.0f : 3.0f;
-            if (left < 0) left = 0;
-            ImGui::Text("Starting in %.1f s", left);
-            ImGui::SameLine();
-            if (UiBigButton("Start now", true)) LB.startNow = true;
-        } else ImGui::Text("Both locked in. Player 1's game starts the match...");
-    }
-    ImGui::SameLine();
-    if (UiBigButton("Back to lobby")) { me.phase = LP_LOBBY; me.ready = me.locked = false; LbChanged(); }
-    ImGui::SameLine();
-    if (UiBigButton("Controls")) { U.backTo = US_SESSION; U.screen = US_CONTROLS; }
-}
-
-static void UiMatchPhase(LbSide& me, bool host) {
-    UiHeading("Match settings agreed");
-    UiNote("Both games go from the main menu straight to the loading screen and the fight. Close the overlay (F1) to watch.");
-    ImGui::Spacing();
-    if (!LB.haveSettings) { ImGui::Text("Waiting for player 1's settings..."); return; }
-    const MatchSettings& s = LB.s;
-    if (ImGui::BeginTable("ms", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableSetupColumn("");
-        ImGui::TableSetupColumn("Player 1");
-        ImGui::TableSetupColumn("Player 2");
-        ImGui::TableHeadersRow();
-        auto row = [&](const char* what, const char* a, const char* b) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn(); ImGui::TextColored(theme::TextDim(), "%s", what);
-            ImGui::TableNextColumn(); ImGui::Text("%s", a);
-            ImGui::TableNextColumn(); ImGui::Text("%s", b);
-        };
-        row("Character", LbCharName(s.chara[0]), LbCharName(s.chara[1]));
-        row("Colour", UiColorName(s.color[0]), UiColorName(s.color[1]));
-        static const char* const slotName[3] = {"Knight L", "Knight M", "Knight H"};
-        for (int k = 0; k < 3; k++) row(slotName[k], UiAssistName(s.assist[0][k]), UiAssistName(s.assist[1][k]));
-        ImGui::EndTable();
-    }
-    ImGui::Text("Stage: %s    Rounds to win: %u    Timer: %s    Input delay: %u    Match %u", LbStageIdName(s.stage), s.rounds, LbTimerName(s.timer), s.delay, me.matchNo);
-    ImGui::Text("Settings checksum %08X", LB.sum);
-    ImGui::SameLine();
-    if (LB.confirmed > 0) ImGui::TextColored(theme::Good(), host ? "- same on the other PC" : "- received from player 1");
-    else if (LB.confirmed < 0) ImGui::TextColored(theme::Bad(), "- DIFFERENT on the other PC!");
-    else ImGui::TextColored(theme::TextDim(), "- waiting for the other PC to confirm");
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    if (UiBigButton("Stuck? End this match")) { me.phase = LP_POST; me.choice = LCH_NONE; me.choiceMatch = 0; LbChanged(); LbNote("match %u ended by hand", me.matchNo); }
-}
-
-static void UiPostPhase(LbSide& me, const LbSide& them) {
-    UiHeading("Match over");
-    ImGui::Spacing();
-    struct { uint8_t c; const char* label; } opts[] = {{LCH_REMATCH, "Rematch"}, {LCH_LOBBY, "Back to lobby"}};
-    for (auto& o : opts) {
-        bool sel = me.choice == o.c && me.choiceMatch == me.matchNo;
-        if (UiBigButton(o.label, sel)) { me.choice = o.c; me.choiceMatch = me.matchNo; LbChanged(); }
-        ImGui::SameLine();
-    }
-    ImGui::NewLine();
-    ImGui::Spacing();
-    bool theirs = them.choice != LCH_NONE && them.choiceMatch == me.matchNo;
-    ImGui::Text("You: %s", me.choice != LCH_NONE && me.choiceMatch == me.matchNo ? LB_CHOICE_NAME[me.choice] : "choose one");
-    ImGui::Text("%s: %s", them.name, theirs ? LB_CHOICE_NAME[them.choice] : "choosing...");
-    UiNote("It happens when you both choose the same. Rematch starts the same fight again with the same settings.");
-}
-
-static void UiSessionScreen() {
-    EnterCriticalSection(&g_lobbyLock);
-    LbSide& me = LB.me;
-    LbSide& them = LB.them;
-    bool host = N.side == 0;
-    switch (me.phase) {
-    case LP_LOBBY: UiLobbyPhase(me, them, host); break;
-    case LP_SETUP: UiSetupPhase(me, them, host); break;
-    case LP_MATCH: UiMatchPhase(me, host); break;
-    case LP_POST: UiPostPhase(me, them); break;
-    }
-    if (LB.note[0] && GetTickCount() - LB.noteAt < 6000) {
-        ImGui::Spacing();
-        ImGui::TextColored(theme::Accent(), "%s", LB.note);
-    }
-    LeaveCriticalSection(&g_lobbyLock);
-}
-
-static void UiButtonsText(uint32_t r, char* out, size_t n) {
-    static const struct { uint32_t b; const char* name; } names[] = {
-        {PB_UP, "Up"}, {PB_DOWN, "Down"}, {PB_LEFT, "Left"}, {PB_RIGHT, "Right"}, {PB_A, "A"}, {PB_B, "B"}, {PB_X, "X"}, {PB_Y, "Y"},
-        {PB_LB, "LB"}, {PB_RB, "RB"}, {0x10000, "LT"}, {0x20000, "RT"}, {PB_START, "Start"}, {PB_BACK, "Back"}, {0x40, "LS"}, {0x80, "RS"}};
-    out[0] = 0;
-    size_t k = 0;
-    for (auto& x : names)
-        if (r & x.b) k += snprintf(out + k, k < n ? n - k : 0, "%s%s", k ? " " : "", x.name);
-    if (!k && r) snprintf(out, n, "%08X", r);
-}
-
-static void UiControlsScreen() {
-    UiHeading("Controls");
-    UiNote("Which controller is yours on this PC. The button layout is in the main menu: Settings > Controls.");
-    ImGui::Spacing();
-    uint32_t gameDev = PadOfPlayer(0);
-    char autoL[96];
-    snprintf(autoL, sizeof autoL, "Automatic: the game's player 1 controller (%s)", gameDev < 10 ? PAD_NAMES[gameDev] : "none");
-    if (ImGui::RadioButton(autoL, U.controller < 0)) { U.controller = -1; UiSaveController(); }
-    if (ImGui::BeginTable("pads", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
-        for (int i = 0; i < 10; i++) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            char l[64];
-            snprintf(l, sizeof l, "%s##pad%d", PAD_NAMES[i], i);
-            if (ImGui::RadioButton(l, U.controller == i)) { U.controller = i; UiSaveController(); }
-            ImGui::TableNextColumn();
-            char b[96];
-            UiButtonsText(U.padRaw[i], b, sizeof b);
-            if (b[0]) ImGui::TextColored(theme::Good(), "%s", b);
-            else ImGui::TextColored(theme::TextDim(), "-");
-        }
-        ImGui::EndTable();
-    }
-    if (!U.detect) { if (UiBigButton("Pick by pressing a button")) { U.detect = true; U.detectArmed = false; } }
-    else { ImGui::TextColored(theme::Accent(), "Press any button on your controller..."); ImGui::SameLine(); if (UiBigButton("Cancel")) U.detect = false; }
-    ImGui::Spacing();
-    if (UiBigButton("Back", true)) U.screen = U.backTo;
-}
-
-static void UiMainPanel(const ImVec2& disp) {
-    ImVec2 size(disp.x * theme::PANEL_W, disp.y * theme::PANEL_H);
-    ImGui::SetNextWindowPos(ImVec2(disp.x * 0.5f, disp.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
-    ImGui::Begin("##arcana_online", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::PushFont(g_fSmall);
-    ImGui::TextColored(theme::AccentDim(), "ARCANA BLOOD ONLINE  -  rollback mod build %u", NET_BUILD);
-    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize("F1 hides this").x);
-    ImGui::TextColored(theme::TextDim(), "F1 hides this");
-    ImGui::PopFont();
-    ImGui::Separator();
-    ImGui::BeginChild("content", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), false);
-    if (U.screen == US_CONTROLS) UiControlsScreen();
-    else if (U.screen == US_SESSION && U.netOn) UiSessionScreen();
-    else UiConnectScreen();
-    ImGui::EndChild();
-    UiStatusLine();
-    ImGui::End();
-}
-
-static bool MmNetInfoOn();   // menu.inc (build 104)
-static void UiStatusBar(const ImVec2& disp) {
-    char ns[200];
-    EnterCriticalSection(&g_statusLock);
-    snprintf(ns, sizeof ns, "%s", g_netStatus);
-    LeaveCriticalSection(&g_statusLock);
-    if (!U.netOn || !ns[0] || !MmNetInfoOn()) return;   // build 104: Settings > Online > Connection info
-    ImGui::SetNextWindowPos(ImVec2(disp.x - 10, 10), ImGuiCond_Always, ImVec2(1, 0));
-    ImGui::SetNextWindowBgAlpha(0.55f);
-    ImGui::Begin("##status", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
-                                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-    ImGui::PushFont(g_fSmall);
-    ImGui::Text("%s", ns);
-    ImGui::PopFont();
-    ImGui::End();
-}
+// (build 116: the old F1 panel - connect screen, old lobby, controls page, status line - is gone;
+// everything runs from our main menu now)
 
 #include "canvas.inc"   // build 106: was playground.inc
 #include "menu.inc"
@@ -1261,8 +773,6 @@ static void UiFrame(IDirect3DDevice9* dev) {
     if (!(show && PG.open.load())) MM.wasOpen = false;   // intro plays again next time
     if (post) PmFrame();
     else if (show && PG.open.load()) MmFrame();
-    else if (show) UiMainPanel(io.DisplaySize);
-    else if (g_cfg.devTools && U.screenVt != SCENE_BTL) UiStatusBar(io.DisplaySize);   // build 109: old text line for testing only
     if (!post && !dc) HudFrame();
     DcFrame();
     ImGui::PopFont();
