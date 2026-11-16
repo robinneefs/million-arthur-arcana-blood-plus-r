@@ -190,10 +190,10 @@ static void UiGameThreadTick(bool focused) {
     U.netOn = N.st == NS_ON;
     U.netHello = N.st == NS_HELLO;
     bool inSynced = NetOn() && N.syncedType;
-    // F1 / F3, or Back + Start on a controller, open / close our main menu; not during fights or tests
+    // F1, or Back + Start on a controller, opens / closes our main menu; not during fights or tests
     static bool comboWas = false;
     bool combo = (U.navBits & (PB_BACK | PB_START)) == (PB_BACK | PB_START);
-    bool toggle = ((KeyPressed(VK_F1) || KeyPressed(VK_F3)) && focused) || (combo && !comboWas);
+    bool toggle = (KeyPressed(VK_F1) && focused) || (combo && !comboWas);
     comboWas = combo;
     {
         int req = U.pgReq.exchange(0);
@@ -202,13 +202,13 @@ static void UiGameThreadTick(bool focused) {
         bool can = !inSynced && g_mode == Mode::Idle && !g_auto;
         // build 101: our main menu is the game's front end. It opens by itself on the game's
         // title screen (from its first picture, so the intro never shows) and every time the
-        // game comes back to it; closing it by hand (F1 / F3) keeps it shut until the next visit.
+        // game comes back to it; closing it by hand (F1) keeps it shut until the next visit.
         static bool mmShut = false;
         static uint32_t prevVt = 0;
         if (vt == VT_TITLE && prevVt != VT_TITLE) mmShut = false;
         prevVt = vt;
         if (PgIsOpen() && (toggle || !can || f3)) {
-            if (can) { mmShut = true; Log("ui: main menu closed by hand (F3 opens it again)"); }
+            if (can) { mmShut = true; Log("ui: main menu closed by hand (F1 opens it again)"); }
             PgSetOpen(false); toggle = false;
         }
         else if (!PgIsOpen() && wantMm && can) { PgSetOpen(true); mmShut = false; }

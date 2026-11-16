@@ -213,7 +213,26 @@ static float MmText(ImDrawList* dl, ImFont* f, float px, float x, float y, ImU32
     return ts.x / g_cv;
 }
 // a controller button badge (A green, B red, X blue, Y yellow)
+// Build 117: a click on a badge (or the word next to it) works like pressing that button; the
+// screen reads it the next frame (MmTakePadClick), since screens read input before they draw.
+// (ImGui::IsMouseHoveringRect needs "false" outside a window: else it only tests ImGui's default 400x400 window.)
+static char g_padClick = 0;
+static int g_padClickFrame = -10;
+static char MmTakePadClick() {
+    char c = g_padClick;
+    g_padClick = 0;
+    return ImGui::GetFrameCount() - g_padClickFrame <= 1 ? c : 0;
+}
 static void MmPadButton(ImDrawList* dl, float x, float y, char letter, ImU32 fill) {
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 a = CP(x - 6, y - 6), b = CP(x + 128, y + 42), m = io.MousePos;
+        bool blocked = false;
+#ifndef UI_HARNESS
+        blocked = g_uiBlock;
+#endif
+        if (!blocked && io.MouseClicked[0] && m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y) { g_padClick = letter; g_padClickFrame = ImGui::GetFrameCount(); }
+    }
     ImVec2 c = CP(x + 18, y + 18);
     dl->AddCircleFilled(c, CV(18), fill, 32);
     dl->AddCircle(c, CV(18), IM_COL32_WHITE, 32, CV(2));
@@ -327,7 +346,7 @@ static void MmInput(const ImVec2* itemA, const ImVec2* itemB) {
             }
     if (act) MmActivate(MM.sel);
     if (edit) { MM_SND |= 2; SuOpen(); return; }   // build 102: My setup editor
-    (void)back;   // build 101: the main menu is the front end now; B / Esc don't leave it (F1 / F3 still close it)
+    (void)back;   // build 101: the main menu is the front end now; B / Esc don't leave it (F1 still closes it)
 }
 
 // ---- build 96: the background: slowly turning magic circles in drifting warm light, with rising embers ----
@@ -531,7 +550,7 @@ static void MmMainFrame() {
         MmText(dl, g_fMenu, 19, x0 + 30, cy + 18, MmC(P.text, in), b, 0, 1, MmC(P.ink, in));
         MmPadButton(dl, bx, cy - 18, 'X', MmRGBA(40, 100, 200, in));
         MmText(dl, g_fMenu, 15, bx + 46, cy, MmC(P.text, in), inv ? "Join" : "Back to it");
-        if (ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(x0, y0 - 30), CP(x1, y1))) {
+        if (ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(x0, y0 - 30), CP(x1, y1), false)) {
             if (inv) net::RoomJoin(g_rv.invite.lobby);
             MM_SND |= 2; MM.screen = 1; MM.roomT = -1;
         }
@@ -549,7 +568,7 @@ static void MmMainFrame() {
         MmLine(dl, x0 + 24, y1 - 56, x1 - x0 - 48, 2, MmC(P.acc, 0.6f * in));
         MmPadButton(dl, x0 + 24, y1 - 46, 'Y', MmRGBA(210, 170, 20, in));
         MmText(dl, g_fMenu, 15, x0 + 70, y1 - 28, MmC(P.text, in), "Edit setup");
-        if (MM.screen == 0 && ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(x0, y0), CP(x1, y1))) { MM_SND |= 2; SuOpen(); }
+        if (MM.screen == 0 && ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(x0, y0), CP(x1, y1), false)) { MM_SND |= 2; SuOpen(); }
     }
 
     // ---- bottom right: Steam + version ----
