@@ -148,6 +148,8 @@ static bool InjectPid(DWORD pid, const std::wstring& dll) {
     return ok;
 }
 
+#include "update.inc"
+
 static int Finish(int code) {
     Say(L"\nPress Enter to close this window.");
     getchar();
@@ -185,6 +187,7 @@ int wmain(int argc, wchar_t** argv) {
         (void)running;
         return Finish(1);
     }
+    if (upd::CheckAndUpdate(dir, argc, argv)) return 0;   // build 115: the updated launcher took over
     if (exe.empty()) exe = FindGameExe();
     if (exe.empty() || !FileExists(exe)) { Say(L"Could not find the game. Use --game \"path to Million Arthur.exe\"."); return Finish(1); }
     Say(L"Game: %ls", exe.c_str());

@@ -811,7 +811,9 @@ void RoomTick(int build) {
                     else if (DataInt(r.lobby, "arb_build", 0) != build) {
                         pLeaveLobby(g_mm, r.lobby);
                         RV.state = ROOM_FAILED;
-                        snprintf(RV.err, sizeof RV.err, "That room uses build %d of the mod, you have build %d", DataInt(r.lobby, "arb_build", 0), build);
+                        int rb = DataInt(r.lobby, "arb_build", 0);   // build 115: say who has to update
+                        if (rb > build) snprintf(RV.err, sizeof RV.err, "That room uses a newer version of the mod (build %d, you have %d). Close the game and start the launcher to update.", rb, build);
+                        else snprintf(RV.err, sizeof RV.err, "That room uses an older version of the mod (build %d, you have %d). The host needs to update.", rb, build);
                     } else EnterRoom(r.lobby, build, false);
                 } else { RV.state = ROOM_FAILED; snprintf(RV.err, sizeof RV.err, "%s", EnterError(r.response)); Log("room: join failed (%u)", r.response); }
             } else if (kind == 4) {   // build 114: code search -> join
