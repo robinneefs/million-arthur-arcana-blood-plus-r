@@ -959,6 +959,7 @@ static void UiStatusBar(const ImVec2& disp) {
 #include "menu.inc"
 #include "postui.inc"   // build 107: after-match screen
 #include "dcui.inc"     // build 108: connection lost pop-up + waiting banner
+#include "hudui.inc"    // build 109: info bar + player names in fights
 #ifndef UI_HARNESS
 #include "sound.inc"
 #endif
@@ -994,6 +995,29 @@ static void UiLoadFonts(float scale) {
 }
 
 // Build 108: the waiting banner and the connection lost pop-up (drawing thread)
+// Build 109: info bar + names over our online fights (drawing thread)
+static void HudFrame() {
+    if (!U.netOn || U.screenVt != SCENE_BTL) return;
+    char nm[2][32];
+    EnterCriticalSection(&g_lobbyLock);
+    int my = N.side == 1 ? 1 : 0;
+    snprintf(nm[my], 32, "%s", LB.me.name[0] ? LB.me.name : "You");
+    snprintf(nm[1 - my], 32, "%s", LB.haveThem && LB.them.name[0] ? LB.them.name : "Opponent");
+    LeaveCriticalSection(&g_lobbyLock);
+    HudName(0, nm[0]);
+    HudName(1, nm[1]);
+    if (!MmNetInfoOn()) return;                       // Settings > Online > Connection info
+    HudInfo h{};
+    h.ping = (int)N.rtt;
+    h.delay = (int)ScreenDelay();
+    h.rollback = (int)HudRollbackShown();
+    h.stutters = (int)g_hud.stutters.load();
+    h.desyncs = (int)N.desyncs;
+    int s5 = HudRecentStutters(5000), s10 = HudRecentStutters(10000);
+    h.quality = (h.ping > 180 || s10 >= 3) ? 2 : (h.ping >= 100 || s5 >= 1) ? 1 : 0;
+    HudBar(h, 17);
+}
+
 static void DcFrame() {
     double now = ImGui::GetTime();
     if (DC.show.load()) {
@@ -1132,7 +1156,8 @@ static void UiFrame(IDirect3DDevice9* dev) {
     if (post) PmFrame();
     else if (show && PG.open.load()) MmFrame();
     else if (show) UiMainPanel(io.DisplaySize);
-    else UiStatusBar(io.DisplaySize);
+    else if (g_cfg.devTools && U.screenVt != SCENE_BTL) UiStatusBar(io.DisplaySize);   // build 109: old text line for testing only
+    if (!post && !dc) HudFrame();
     DcFrame();
     ImGui::PopFont();
     ImGui::EndFrame();
