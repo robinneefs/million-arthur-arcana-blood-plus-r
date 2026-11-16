@@ -18,6 +18,9 @@ static MmNav MmReadNav(bool typing) {
     MmNav n;
     ImGuiIO& io = ImGui::GetIO();
     double now = ImGui::GetTime();
+#ifndef UI_HARNESS
+    if (g_uiBlock) { MM.prevNav = U.capture.load() ? U.navBits : 0; return n; }   // build 108: the pop-up has the input
+#endif
     if (!typing) {
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_UpArrow])) n.dy = -1;
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_DownArrow])) n.dy = 1;
@@ -57,6 +60,9 @@ static MmNav MmReadNav(bool typing) {
     return n;
 }
 static bool MmHover(float x0, float y0, float x1, float y1) {
+#ifndef UI_HARNESS
+    if (g_uiBlock) return false;
+#endif
     ImVec2 m = ImGui::GetIO().MousePos, a = CP(x0, y0), b = CP(x1, y1);
     return m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y;
 }

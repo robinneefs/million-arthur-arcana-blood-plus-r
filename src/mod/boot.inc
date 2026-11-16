@@ -136,6 +136,15 @@ static void __attribute__((thiscall)) H_NextScreen(void* self, void* blk, int* n
 typedef void(__attribute__((thiscall)) * BtlFinishedFn)(void*, void*, int*, void*);
 static void __attribute__((thiscall)) H_BtlFinished(void* self, void* blk, int* next, void* flag) {
     reinterpret_cast<BtlFinishedFn>(FN_BTL_FINISHED)(self, blk, next, flag);
+    if (g_dcExit && next) {               // build 108: the connection was lost and the player pressed OK
+        g_dcExit = false;
+        Log("boot: the fight screen finished after the connection was lost; the game chose screen %d, going to the main menu", *next);
+        *next = (int)SCREEN_TITLE;
+        g_postOn = false;
+        postFight = false;
+        if (st != B_IDLE) SetState(B_IDLE);
+        return;
+    }
     if (st != B_FIGHT || !next) return;
     Log("boot: the fight screen finished; the game chose screen %d (setup +0: P1 %u, P2 %u); going to the main menu instead",
         *next, U32(SETUP), U32(SETUP + SETUP_STRIDE));
@@ -385,6 +394,18 @@ static void Tick() {
     }
     uint32_t vt, ptr;
     CurScreen(&vt, &ptr);
+    if (g_dcExit) {                      // build 108: end the fight after "connection lost" (Btl +0x28 = leave)
+        static uint32_t btlFrames = 0;
+        if (vt == SCENE_BTL && ptr) {
+            if (++btlFrames >= 3 && !*reinterpret_cast<uint8_t*>(ptr + 0x28)) {
+                *reinterpret_cast<uint8_t*>(ptr + 0x28) = 1;
+                Log("boot: connection lost: asking the fight screen to end");
+            }
+        } else {
+            btlFrames = 0;
+            if (vt == VT_TITLE) { g_dcExit = false; Log("boot: connection lost: back on the title screen"); }
+        }
+    }
     switch (st) {
     case B_IDLE: break;
     case B_WAIT_TITLE:
@@ -552,6 +573,7 @@ static void SessionEnd() {
 } // namespace boot
 
 static void BootSessionEnd() { boot::SessionEnd(); }
+static bool BootInMatch() { return boot::st != boot::B_IDLE; }
 static bool BootInPlaceOk() { return boot::InPlaceOk(); }
 static void BootInPlaceArm(uint32_t matchNo, uint32_t at) { boot::InPlaceArm(matchNo, at); }
 static int BootZeroInput() { return boot::ZeroInput(); }

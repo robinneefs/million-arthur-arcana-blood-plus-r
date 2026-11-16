@@ -5038,6 +5038,11 @@ static void PollHotkeys() {
     bool f9 = KeyPressed(VK_F9), f10 = KeyPressed(VK_F10), f11 = KeyPressed(VK_F11), f8 = KeyPressed(VK_F8);
     bool f7 = KeyPressed(VK_F7), f6 = KeyPressed(VK_F6);
     bool f4 = KeyPressed(VK_F4), f5 = KeyPressed(VK_F5);
+    bool del = KeyPressed(VK_DELETE);
+    // build 108 test keys, loopback test only: hold Insert = no packets from the "other player",
+    // Delete = the "other player" leaves
+    g_loopMute = N.loop && focused && (GetAsyncKeyState(VK_INSERT) & 0x8000);
+    if (N.loop && focused && del && N.st == NS_ON) NetEnd("the other player left");
     UiGameThreadTick(focused);
     if (!focused || !g_cfg.devTools) return;   // build 106: test keys only with [dev] tools=1
     if (f4) {
@@ -5164,6 +5169,7 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
 static uint32_t __attribute__((thiscall)) H_ChildUpdate(void* child) {
     g_childRan = child && !reinterpret_cast<uint8_t*>(child)[4];
     if (boot::HoldsTitle(child)) { g_childRan = false; return 0; }   // build 101: our main menu is up
+    if (g_dcFreeze && child && *reinterpret_cast<uint32_t*>(child) != VT_TITLE) { g_childRan = false; return 0; }   // build 108: connection lost pop-up
     // Build 52: online, on a synced screen, the game's first call of the
     // screen's update after loading is held back and only marks this PC ready
     // (see NetBeforeInput). The screen's real first update is then frame 1,
