@@ -1006,7 +1006,8 @@ static void NetHandle(const uint8_t* p, int n) {
         }
         if (m->proto != NET_PROTO || m->build != NET_BUILD) {
             Log("net: the other game runs mod build %u (protocol %u), this one %u (%u)", m->build, m->proto, NET_BUILD, NET_PROTO);
-            NetEnd("the other player has a different mod build");
+            NetEnd(m->build > NET_BUILD ? "the other player has a newer version of the mod: close the game and start the launcher to update"
+                                        : "the other player has an older version of the mod: they need to update");
             return;
         }
         if (m->codeHash != N.codeHash) { NetEnd("the other player's game version is different"); return; }

@@ -556,6 +556,16 @@ static void MmMainFrame() {
     MmImg(dl, "MA10_CS_NETWORK", 147, 1430, 1022, 34, 34);
     MmText(dl, g_fMenu, 14, 1474, 1040, g_rv.steam ? MmRGBA(150, 220, 170) : MmC(P.faint), g_rv.steam ? "STEAM ONLINE" : "STEAM NOT FOUND");
     MmText(dl, g_fMenu, 13, 1870, 1040, MmC(P.gold), MOD_VERSION_SHORT, 2);
+    {   // build 115: the launcher found a newer version that was not installed ("Not now")
+        static char upd[40] = "?";
+        if (upd[0] == '?') { DWORD n = GetEnvironmentVariableA("ARCANA_UPDATE", upd, sizeof upd); if (!n || n >= sizeof upd) upd[0] = 0; }
+        if (upd[0]) {
+            char t[96];
+            snprintf(t, sizeof t, "UPDATE AVAILABLE: V%s  -  START THE LAUNCHER AGAIN TO INSTALL", upd);
+            for (char* c = t; *c; c++) *c = (char)toupper((unsigned char)*c);
+            MmText(dl, g_fMenu, 13, 1870, 1012, MmC(P.text), t, 2);
+        }
+    }
 
     dl->PopClipRect();
     ImGui::End();
