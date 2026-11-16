@@ -525,10 +525,12 @@ static void MmMainFrame() {
         char a[96], b[64];
         if (inv) { snprintf(a, sizeof a, "%s invited you to", g_rv.invite.name); snprintf(b, sizeof b, "THEIR ROOM"); }
         else { snprintf(a, sizeof a, "%d of %d players", g_rv.nMembers, g_rv.set.size); snprintf(b, sizeof b, "%s", g_rv.set.name); }
-        MmText(dl, g_fUi, 24, x0 + 22, y0 + 38, MmC(P.dim, in), a);
-        MmText(dl, g_fMenu, 19, x0 + 22, y0 + 70, MmC(P.text, in), b, 0, 1, MmC(P.ink, in));
-        MmPadButton(dl, x1 - 150, y0 + 94, 'X', MmRGBA(40, 100, 200, in));
-        MmText(dl, g_fMenu, 15, x1 - 104, y0 + 112, MmC(P.text, in), inv ? "Join" : "Back to it");
+        // build 114: text and button centred in the card (friend test: the old layout looked off)
+        float cy = (y0 + y1) / 2 + 4, bx = x1 - (inv ? 128 : 186);
+        MmText(dl, g_fUi, 24, x0 + 30, cy - 18, MmC(P.dim, in), a);
+        MmText(dl, g_fMenu, 19, x0 + 30, cy + 18, MmC(P.text, in), b, 0, 1, MmC(P.ink, in));
+        MmPadButton(dl, bx, cy - 18, 'X', MmRGBA(40, 100, 200, in));
+        MmText(dl, g_fMenu, 15, bx + 46, cy, MmC(P.text, in), inv ? "Join" : "Back to it");
         if (ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(x0, y0 - 30), CP(x1, y1))) {
             if (inv) net::RoomJoin(g_rv.invite.lobby);
             MM_SND |= 2; MM.screen = 1; MM.roomT = -1;

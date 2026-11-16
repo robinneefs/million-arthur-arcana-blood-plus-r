@@ -401,8 +401,19 @@ static void LobbyTick() {
             if (host && LB.confirmed == 0 && now - g_lbLastStartSend > 300) { LbSendStart(); g_lbLastStartSend = now; }
             break;
         case LP_POST:
-            if (me.choice != LCH_NONE && me.choiceMatch == me.matchNo && them.choice == me.choice && them.choiceMatch == me.matchNo) {
-                uint8_t c = me.choice;
+        {
+            // Build 114 (friend test): Back to room wins. When one player picks it, both go,
+            // whatever the other picked; Rematch needs both. (Once player 1 has started the
+            // rematch, player 2 follows it.)
+            bool mineOk = me.choice != LCH_NONE && me.choiceMatch == me.matchNo;
+            bool theirsOk = them.choice != LCH_NONE && them.choiceMatch == me.matchNo;
+            bool hostRematched = !host && them.phase == LP_MATCH && them.matchNo == me.matchNo + 1;
+            uint8_t c = LCH_NONE;
+            if (hostRematched) c = LCH_REMATCH;
+            else if ((mineOk && me.choice == LCH_LOBBY) || (theirsOk && them.choice == LCH_LOBBY)) c = LCH_LOBBY;
+            else if (mineOk && theirsOk && me.choice == them.choice) c = me.choice;
+            if (c != LCH_NONE) {
+                if (me.choice != c || me.choiceMatch != me.matchNo) { me.choice = c; me.choiceMatch = me.matchNo; }
                 if (c == LCH_REMATCH) {
                     // Build 107: in place (the game's own rematch, no main menu / loading screen)
                     // when both PCs are still in the fight's result phase. Player 1 picks the
@@ -441,6 +452,7 @@ static void LobbyTick() {
                 }
                 LbChanged();                // (the choice stays in the messages until the next match ends)
             }
+        }
             break;
         }
     }

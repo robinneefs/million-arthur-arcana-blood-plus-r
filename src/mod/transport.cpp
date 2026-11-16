@@ -320,6 +320,7 @@ static struct {
     bool changeReq = false;
     char say[8][200];
     int nSay = 0;
+    char code[8] = "";                 // build 114: join by code
     // build 112: my member data to write (key -> value, newest wins)
     char dk[8][8], dv[8][64];
     int nData = 0;
@@ -518,6 +519,20 @@ static void WriteRoomData(uint64_t lobby, const RoomSettings& s, int build) {
     pSetLobbyData(g_mm, lobby, "name", s.name);
     pSetLobbyData(g_mm, lobby, "host", SteamFriendName(g_me));
     pSetLobbyData(g_mm, lobby, "priv", s.priv ? "1" : "0");
+    // build 114: private rooms get a code; they are Steam "public" lobbies that our Room
+    // search leaves out (priv=1), so a search for the code can find them
+    if (s.priv) {
+        const char* old = pGetLobbyData(g_mm, lobby, "code");
+        if (!old || strlen(old) != 6) {
+            static const char ab[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // no 0/O, 1/I
+            char c[8];
+            uint32_t r = GetTickCount() ^ (uint32_t)(lobby * 2654435761u) ^ (uint32_t)(g_me >> 7);
+            for (int i = 0; i < 6; i++) { r = r * 1664525u + 1013904223u; c[i] = ab[(r >> 16) % 32]; }
+            c[6] = 0;
+            pSetLobbyData(g_mm, lobby, "code", c);
+            Log("room: room code %s", c);
+        }
+    } else pSetLobbyData(g_mm, lobby, "code", "");
     snprintf(v, sizeof v, "%d", s.rounds); pSetLobbyData(g_mm, lobby, "rounds", v);
     snprintf(v, sizeof v, "%d", s.timer); pSetLobbyData(g_mm, lobby, "timer", v);
     snprintf(v, sizeof v, "%d", s.setLen); pSetLobbyData(g_mm, lobby, "setlen", v);
@@ -595,6 +610,10 @@ static void ReadRoom(uint64_t lobby) {
     const char* nm = pGetLobbyData(g_mm, lobby, "name");
     snprintf(RV.set.name, sizeof RV.set.name, "%s", nm && *nm ? nm : "Room");
     RV.set.priv = DataInt(lobby, "priv", 0) != 0;
+    {
+        const char* c = pGetLobbyData(g_mm, lobby, "code");
+        snprintf(RV.code, sizeof RV.code, "%s", RV.set.priv && c ? c : "");
+    }
     RV.set.rounds = DataInt(lobby, "rounds", 2);
     RV.set.timer = DataInt(lobby, "timer", 2);
     RV.set.setLen = DataInt(lobby, "setlen", 0);
@@ -688,7 +707,7 @@ void RoomTick(int build) {
         RQ.create = false;
         if (RV.id) { pLeaveLobby(g_mm, RV.id); RV.id = 0; }
         int size = RQ.set.size < 2 ? 2 : RQ.set.size > 8 ? 8 : RQ.set.size;
-        g_call = pCreateLobby(g_mm, RQ.set.priv ? 0 : 2, size);   // 0 private (invite only), 2 public
+        g_call = pCreateLobby(g_mm, 2, size);   // build 114: always Steam-public; private = left out of our search, joined by code or invite
         g_callKind = 1; g_callStart = GetTickCount();
         RV.state = ROOM_CREATING; RV.err[0] = 0;
         Log("room: creating a %s room for %d", RQ.set.priv ? "private" : "public", size);
@@ -711,11 +730,22 @@ void RoomTick(int build) {
         char v[16];
         snprintf(v, sizeof v, "%d", build);
         pAddStringFilter(g_mm, "arb_build", v, 0);
+        pAddStringFilter(g_mm, "priv", "0", 0);   // build 114: private rooms are not listed
         pAddDistanceFilter(g_mm, 3);            // worldwide
         pAddResultCountFilter(g_mm, ROOM_MAX_LIST);
         g_call = pRequestLobbyList(g_mm);
         g_callKind = 2; g_callStart = GetTickCount();
         RV.searching = true;
+    }
+    if (!g_call && RQ.code[0]) {   // build 114: find a private room by its code
+        pAddStringFilter(g_mm, "arb", "1", 0);
+        pAddStringFilter(g_mm, "code", RQ.code, 0);
+        pAddDistanceFilter(g_mm, 3);
+        pAddResultCountFilter(g_mm, 1);
+        g_call = pRequestLobbyList(g_mm);
+        g_callKind = 4; g_callStart = GetTickCount();
+        Log("room: looking for the room with code %s", RQ.code);
+        RQ.code[0] = 0;
     }
     if (RQ.invite && RV.id) {
         bool sent = pInviteUserToLobby(g_mm, RV.id, RQ.invite);
@@ -759,7 +789,7 @@ void RoomTick(int build) {
             snprintf(s.name, sizeof s.name, "%s", RV.set.name);
             WriteRoomData(RV.id, s, build);
             if (s.size >= RV.nMembers && s.size >= 2 && s.size <= 8) pSetLobbyMemberLimit(g_mm, RV.id, s.size);
-            pSetLobbyType(g_mm, RV.id, s.priv ? 0 : 2);
+            pSetLobbyType(g_mm, RV.id, 2);
         }
         RQ.changeReq = false;
     } else RQ.nSay = 0;
@@ -784,6 +814,21 @@ void RoomTick(int build) {
                         snprintf(RV.err, sizeof RV.err, "That room uses build %d of the mod, you have build %d", DataInt(r.lobby, "arb_build", 0), build);
                     } else EnterRoom(r.lobby, build, false);
                 } else { RV.state = ROOM_FAILED; snprintf(RV.err, sizeof RV.err, "%s", EnterError(r.response)); Log("room: join failed (%u)", r.response); }
+            } else if (kind == 4) {   // build 114: code search -> join
+                LobbyMatchList r{};
+                uint64_t id = 0;
+                if (pGetAPICallResult(g_utils, c, &r, sizeof r, 510, &failed) && !failed && r.count > 0) id = pGetLobbyByIndex(g_mm, 0);
+                if (id) {
+                    if (RV.id && RV.id != id) { pLeaveLobby(g_mm, RV.id); RV.id = 0; }
+                    g_call = pJoinLobby(g_mm, id);
+                    g_callKind = 3; g_callStart = GetTickCount();
+                    RV.state = ROOM_JOINING;
+                    Log("room: code found room %llu, joining", (unsigned long long)id);
+                } else {
+                    RV.state = ROOM_FAILED;
+                    snprintf(RV.err, sizeof RV.err, "No room with that code");
+                    Log("room: no room with that code");
+                }
             } else if (kind == 2) {
                 LobbyMatchList r{};
                 RV.nRooms = 0;
@@ -845,6 +890,16 @@ void RoomSetReady(bool on) { RQLOCK QueueData("rdy", on ? "1" : "0"); RV.myReady
 void RoomSetMyData(const char* key, const char* val) { RQLOCK QueueData(key, val); }
 void RoomStandIn(bool on) { RQLOCK g_standIn = on; }
 void RoomSystemLine(const char* text) { RQLOCK ChatAdd(g_me, "", text, true); }
+void RoomJoinCode(const char* code) {
+    RQLOCK
+    int n = 0;
+    for (const char* p = code; *p && n < 6; p++) {
+        char ch = *p >= 'a' && *p <= 'z' ? (char)(*p - 32) : *p;
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) RQ.code[n++] = ch;
+    }
+    RQ.code[n] = 0;
+    RV.state = ROOM_JOINING; RV.err[0] = 0;
+}
 void RoomKick(uint64_t member) { RQLOCK if (member && member != g_me && member != ROOM_STANDIN_ID) g_kickReq = member; }
 #undef RQLOCK
 } // namespace net

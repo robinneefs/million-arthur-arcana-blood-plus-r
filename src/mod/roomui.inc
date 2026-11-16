@@ -203,9 +203,11 @@ static void MmSeatDraw(ImDrawList* dl, float x, float y, const MmSeat& s, int si
     dl->AddRect(CP(x, y), CP(x + pw, y + ph), MmRGBA(214, 170, 82), 0, 0, CV(1.5f));
     // 1P red, 2P gold badge on the top left corner
     MmRgb bc = side == 1 ? P.acc : P.gold;
-    dl->AddRectFilled(CP(x - 10, y - 12), CP(x + 44, y + 16), MmC(bc), CV(5));
-    dl->AddRect(CP(x - 10, y - 12), CP(x + 44, y + 16), MmC(P.text), CV(5), 0, CV(1.5f));
-    MmText(dl, g_fMenu, 13, x + 17, y + 2, MmC(side == 1 ? P.text : P.ink), side == 1 ? "1P" : "2P", 1, 0, 0, 0.5f);
+    // build 114: the 1P / 2P badge sits centred on the top edge, above the seat cursor (friend test)
+    float bx = x + pw / 2 - 27, by = y - 26;
+    dl->AddRectFilled(CP(bx, by), CP(bx + 54, by + 28), MmC(bc), CV(5));
+    dl->AddRect(CP(bx, by), CP(bx + 54, by + 28), MmC(P.text), CV(5), 0, CV(1.5f));
+    MmText(dl, g_fMenu, 13, bx + 27, by + 14, MmC(side == 1 ? P.text : P.ink), side == 1 ? "1P" : "2P", 1, 0, 0, 0.5f);
     bool you = !strcmp(s.name, "You");
     MmText(dl, g_fUiBold, 25, x + pw / 2 + 1, y + ph + 23, MmRGBA(0, 0, 0, 0.6f), s.name, 1);
     MmText(dl, g_fUiBold, 25, x + pw / 2, y + ph + 22, you ? MmC(P.gold) : MmC(P.text), s.name, 1);
@@ -332,7 +334,7 @@ static void MmCreateFrame() {
         }
     }
     const char* hints[6] = {"Shown in Room search and to the friends you invite.",
-                            "Public rooms show up in Room search. Private rooms can only be joined by invite.",
+                            "Public rooms show up in Room search. Private rooms get a code to share; join with the code or an invite.",
                             "2 to 8 players. Two players share a table, so 8 players means 4 tables.",
                             "Rounds needed to win a game.", "Time limit of each round, in seconds.",
                             "How many games two players play before both go back to the room."};
@@ -368,16 +370,40 @@ static void MmCreateFrame() {
 static int g_srSel = 0;
 static double g_srLast = -100;
 static uint32_t g_srSeq = 0;
+static bool g_codeOpen = false, g_codeFocus = false;   // build 114: "join with code" box
+static char g_codeIn[16] = "";
 static void MmSearchFrame() {
     const MmPal& P = MmP();
-    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_srSel = 0; g_srLast = -100; }
+    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_srSel = 0; g_srLast = -100; g_codeOpen = false; }
     MmT T = MmTimes(MM.roomT);
+    if (g_codeOpen) {   // build 114: type the code, Enter joins, Esc / B closes
+        ImGuiIO& io = ImGui::GetIO();
+        bool typing = io.WantTextInput;
+        MmNav nav = MmReadNav(typing);
+        if ((nav.b && !typing) || (typing && ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Escape]))) { g_codeOpen = false; MM_SND |= 4; ImGui::SetWindowFocus(nullptr); }
+        ImDrawList* dl = MmPageBegin("##search", T.tm, T.pulse);
+        MmPageTitle(dl, "MAIN MENU", "JOIN WITH CODE", 1);
+        float x0 = 660, x1 = 1260, y0 = 380, y1 = 640;
+        MmSection(dl, x0, y0, x1, y1, "ROOM CODE", 1);
+        MmText(dl, g_fUi, 24, 960, y0 + 60, MmC(P.dim), "Type the code the host shares (6 letters and numbers).", 1);
+        bool enter = MmTextField("##code", g_codeIn, 8, 760, y0 + 100, 1160, y0 + 160, "ABC123", g_codeFocus);
+        g_codeFocus = false;
+        MmText(dl, g_fUi, 22, 960, y0 + 210, MmC(P.faint), "Enter joins  -  Esc closes", 1);
+        if (enter && strlen(g_codeIn) >= 4) {
+            net::RoomJoinCode(g_codeIn);
+            g_codeIn[0] = 0; g_codeOpen = false; MM_SND |= 2;
+            MM.screen = 1; MM.roomT = -1;
+        }
+        MmPageEnd(dl);
+        return;
+    }
     if (T.now - g_srLast > 15.0 && !g_rv.searching) { net::RoomSearch(); g_srLast = T.now; }   // refresh now and then
     MmNav nav = MmReadNav(false);
     int n = g_rv.nRooms;
     if (g_rv.searchSeq != g_srSeq) { g_srSeq = g_rv.searchSeq; if (g_srSel >= n) g_srSel = n ? n - 1 : 0; }
     if (nav.dy && n) { g_srSel = (g_srSel + nav.dy + n) % n; MM_SND |= 1; }
     if (nav.y) { net::RoomSearch(); g_srLast = T.now; MM_SND |= 1; }
+    if (nav.x) { g_codeOpen = true; g_codeFocus = true; g_codeIn[0] = 0; MM_SND |= 2; return; }
     if (nav.b) { MM_SND |= 4; MmGoMenu(); return; }
     int join = -1;
     if (nav.a && n) join = g_srSel;
@@ -388,6 +414,9 @@ static void MmSearchFrame() {
     MmPadButton(dl, 1640, 56, 'Y', MmRGBA(210, 170, 20, in));
     MmText(dl, g_fMenu, 18, 1686, 74, MmC(P.text, in), "REFRESH");
     if (MmClicked(1630, 46, 1880, 100)) { net::RoomSearch(); g_srLast = T.now; }
+    MmPadButton(dl, 1240, 56, 'X', MmRGBA(40, 100, 200, in));   // build 114
+    MmText(dl, g_fMenu, 18, 1286, 74, MmC(P.text, in), "JOIN WITH CODE");
+    if (MmClicked(1230, 46, 1600, 100)) { g_codeOpen = true; g_codeFocus = true; g_codeIn[0] = 0; MM_SND |= 2; }
     const float X0 = 360, X1 = 1560, Y0 = 190, RH = 74;
     float listBottom = 930;
     MmSection(dl, X0, Y0, X1, listBottom, "PUBLIC ROOMS", in);
@@ -431,7 +460,7 @@ static void MmSearchFrame() {
         net::RoomJoin(g_rv.rooms[join].id);
         MM.screen = 1; MM.roomT = -1;
     }
-    MmText(dl, g_fUi, 22, (X0 + X1) / 2, 966, MmC(P.faint, in), "Only rooms of this build of the mod are shown. Private rooms can only be joined by invite.", 1);
+    MmText(dl, g_fUi, 22, (X0 + X1) / 2, 966, MmC(P.faint, in), "Only rooms of this build of the mod are shown. Private rooms: X and the room code, or a Steam invite.", 1);
     MmPadButton(dl, 50, 1004, 'A', MmRGBA(40, 160, 70));
     MmText(dl, g_fMenu, 13, 94, 1022, MmC(P.text), "Join");
     MmPadButton(dl, 180, 1004, 'B', MmRGBA(190, 40, 40));
@@ -567,6 +596,11 @@ static void MmRoomFrame() {
         char lb[8];
         snprintf(lb, sizeof lb, "/ %d", R.set.size);
         MmText(dl, g_fMenu, 22, px + 250 + nw, 80, MmC(P.dim, in), lb);
+        if (R.code[0]) {   // build 114: the private room's code
+            float cx = px + 420;
+            MmText(dl, g_fMenu, 15, cx, 74, MmC(P.dim, in), "CODE");
+            MmText(dl, g_fMenu, 30, cx + 80, 74, MmC(P.gold, in), R.code, 0, 2, MmC(P.ink, in));
+        }
         MmPadButton(dl, 1600, 56, 'B', MmRGBA(190, 40, 40, in));
         if (hold > 0.15f) {   // how long B has been held
             dl->PathArcTo(CP(1618, 74), CV(24), -IM_PI / 2, -IM_PI / 2 + IM_PI * 2 * ImMin(hold, 1.0f), 32);
@@ -687,8 +721,8 @@ static void MmRoomFrame() {
                 st.name = m->me ? "You" : m->name;
                 st.pill = playing ? "PLAY" : m->ready ? "READY" : "WAIT";
             }
-            MmSeatDraw(dl, sx[k], sy, st, k + 1, canSit && !m);
             if (g_seatSel == seat && !g_invOpen) dl->AddRect(CP(sx[k] - 4, sy - 4), CP(sx[k] + 134, sy + 194), MmC(P.gold, in), CV(10), 0, CV(3));
+            MmSeatDraw(dl, sx[k], sy, st, k + 1, canSit && !m);   // (build 114: over the cursor, so the badge stays on top)
         }
         float cx = (x0 + x1) / 2;
         bool both = sm[0] && sm[1];

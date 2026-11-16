@@ -61,6 +61,7 @@ struct RoomView {
     char err[128];
     uint64_t id, owner, me;
     RoomSettings set;
+    char code[8];                  // build 114: private rooms: the code to join with ("" = none)
     int nMembers;
     RoomMember members[ROOM_MAX_MEMBERS];
     bool searching;
@@ -96,6 +97,8 @@ void RoomSetMyData(const char* key, const char* val);   // other member data: "s
 void RoomStandIn(bool on);                   // [dev] room_standin=1: a test player sits across from you
 void RoomSystemLine(const char* text);       // a grey line in the room chat, only on this PC
 // ---- Build 113 ----
-void RoomKick(uint64_t member);              // host only: that player's game leaves the room and can't come back
+void RoomKick(uint64_t member);
+// ---- Build 114 ----
+void RoomJoinCode(const char* code);         // find the private room with this code and join it              // host only: that player's game leaves the room and can't come back
 
 } // namespace net
