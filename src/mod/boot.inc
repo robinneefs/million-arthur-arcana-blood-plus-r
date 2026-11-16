@@ -65,9 +65,11 @@ static bool rmPending = false;          // rematch agreed: restart after frame r
 static uint32_t rmAt = 0;
 static uint16_t rmYesEpoch = 0xFFFF;    // the restart's synced screen: frame 1 answers YES there
 static bool rmYesArmed = false;
+static bool restarting = false;         // build 107b: the game took the rematch, waiting for it to start again
 static bool answerNo = false;           // Back to room: answer NO, the fight screen ends as before
 static uint32_t winsAtStart[2] = {0, 0};
-static const uint32_t G_WINS = 0x04B79364;   // game's win count per player (+p*4), draws at 0x04B79360
+static const uint32_t G_WINS = 0x04B79364;
+static const uint32_t G_RESULT = 0x04B79480;   // game's win count per player (+p*4), draws at 0x04B79360
 
 static inline uint32_t& U32(uint32_t a) { return *reinterpret_cast<uint32_t*>(a); }
 static void SetState(State n) {
@@ -170,15 +172,25 @@ static int __cdecl H_DlgDone(int p) {
         // build 107: "not answered" while both choose; answered on the restart's first frame
         // (rematch) or once Back to room was agreed. The same answer in every rollback replay
         // (rematch: a new synced screen; Back to room: rollback is switched off first).
+        // build 107b (test 107: a faked YES left the game's boxes open, and the fight waited
+        // for them): in the rematch's synced screen both players really press A on YES
+        // (NetFill), and the game's own boxes answer
+        if (rmYesArmed && rmYesEpoch == N.epoch) return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_DONE)(p);
         boxSkips++;
-        if (rmYesArmed && rmYesEpoch == N.epoch) return 1;
         return answerNo ? 1 : 0;
     }
     return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_DONE)(p);
 }
 static int __cdecl H_DlgAnswer(int p) {
-    if (skipBox && st == B_FIGHT) return rmYesArmed && rmYesEpoch == N.epoch ? 1 : 0;
+    if (skipBox && st == B_FIGHT && !(rmYesArmed && rmYesEpoch == N.epoch)) return 0;
     return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_ANSWER)(p);
+}
+// Build 107b: the game's boxes (WINNER / LOSER, "Request rematch?") are not drawn while our
+// after-match screen covers the fight. Replaces game main's call of the box drawing (0x596260).
+static const uint32_t CALL_DLG_DRAW = 0x005BEF3F, FN_DLG_DRAW = 0x00596260;
+static void __cdecl H_DlgDraw() {
+    if (g_postOn.load() || (st == B_FIGHT && postFight)) return;
+    reinterpret_cast<void(__cdecl*)()>(FN_DLG_DRAW)();
 }
 static void InstallBoxSkip() {
     int ok = 0;
@@ -216,6 +228,13 @@ static bool HoldsTitle(void* screen) {
 
 static bool Install() {
     InstallBoxSkip();
+    {   // build 107b
+        uint8_t e[5] = {0xE8};
+        int32_t rel = (int32_t)(FN_DLG_DRAW - (CALL_DLG_DRAW + 5));
+        memcpy(e + 1, &rel, 4);
+        bool ok = util::BytesMatch(CALL_DLG_DRAW, e, 5) && util::WriteRel32(CALL_DLG_DRAW, 0xE8, (void*)H_DlgDraw);
+        Log("boot: hiding the game's boxes under our after-match screen %s", ok ? "installed" : "OFF, unexpected bytes");
+    }
     {
         wchar_t ini[MAX_PATH];
         _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
@@ -256,7 +275,11 @@ static void FightStarts() {
 static void PostStarts() {
     postFight = true;
     uint32_t w0 = U32(G_WINS), w1 = U32(G_WINS + 4);
-    int winner = w0 > winsAtStart[0] ? 0 : w1 > winsAtStart[1] ? 1 : -1;
+    // build 107b (test 107: the game's win counts stay 0 in Versus): the fight's result block
+    // 0x04B79480: +0x88 draw (byte), +0x8C winner (0 / 1), as the result phase reads it
+    bool draw = *reinterpret_cast<uint8_t*>(G_RESULT + 0x88) != 0;
+    uint32_t wi = U32(G_RESULT + 0x8C);
+    int winner = draw || wi > 1 ? -1 : (int)wi;
     EnterCriticalSection(&g_lobbyLock);
     LbSide& me = LB.me;
     if (winner >= 0) LB.setWins[winner]++;
@@ -272,8 +295,8 @@ static void PostStarts() {
     LB.postAt = GetTickCount();
     LeaveCriticalSection(&g_lobbyLock);
     g_postOn = true;
-    Log("boot: fight frame %u: result phase: player %d won (game counts %u/%u, draws %u; set %u-%u); after-match screen up, rollback stays on",
-        stateFrames, winner + 1, w0, w1, U32(G_WINS - 4), LB.setWins[0], LB.setWins[1]);
+    Log("boot: fight frame %u: result phase: %s (result block: draw %d, winner %u; game counts %u/%u); set %u-%u; after-match screen up, rollback stays on",
+        stateFrames, winner < 0 ? "draw" : winner == 0 ? "player 1 won" : "player 2 won", (int)draw, wi, w0, w1, LB.setWins[0], LB.setWins[1]);
 }
 // Build 107: can a rematch start in place now (both PCs still in this fight's result phase)?
 static bool InPlaceOk() {
@@ -308,9 +331,11 @@ static void AnswerNo() {
     rmPending = false;
     Log("boot: back to the room: answering the rematch box NO (rollback off for the rest of this fight)");
 }
-// Build 107: zero both players' input in our match's result phase (the box is ours now)
-static bool ZeroInput() {
-    return st == B_FIGHT && postFight;
+// Build 107: zero both players' input in our match's result phase (the box is ours now).
+// 107b: 2 = press A instead (the rematch's synced screen: YES on the game's own box)
+static int ZeroInput() {
+    if (st != B_FIGHT || !postFight) return 0;
+    return rmYesArmed && rmYesEpoch == N.epoch ? 2 : 1;
 }
 
 // Every game frame, before the update (game thread).
@@ -397,7 +422,12 @@ static void Tick() {
             if (ph == 7 && !postFight && NetOn()) PostStarts();
             if (rmYesArmed && ph != 7 && ph < 0x100) {
                 rmYesArmed = false;
-                Log("boot: fight frame %u: the game took the rematch (phase %d); the fight starts again in place", stateFrames, (int)ph);
+                restarting = true;
+                Log("boot: fight frame %u: the game took the rematch (phase %d)", stateFrames, (int)ph);
+            }
+            if (restarting && ph != 8) {   // build 107b: our screen (and the hidden boxes) stay until the game restarts
+                restarting = false;
+                Log("boot: fight frame %u: the fight starts again in place (phase %d)", stateFrames, (int)ph);
                 g_postOn = false;
                 FightStarts();
             }
@@ -482,7 +512,7 @@ static void SessionEnd() {
     }
     if (st != B_IDLE) SetState(B_IDLE);
     bootedMatch = 0;
-    postFight = rmPending = rmYesArmed = answerNo = false;
+    postFight = rmPending = rmYesArmed = answerNo = restarting = false;
     g_postOn = false;
 }
 
@@ -491,6 +521,6 @@ static void SessionEnd() {
 static void BootSessionEnd() { boot::SessionEnd(); }
 static bool BootInPlaceOk() { return boot::InPlaceOk(); }
 static void BootInPlaceArm(uint32_t matchNo, uint32_t at) { boot::InPlaceArm(matchNo, at); }
-static bool BootZeroInput() { return boot::ZeroInput(); }
+static int BootZeroInput() { return boot::ZeroInput(); }
 static void BootAnswerNo() { boot::AnswerNo(); }
 static void BootInputOverride(uint32_t T, uint32_t in[2][2]) { boot::InputOverride(T, in); }
