@@ -31,7 +31,7 @@ static struct Mm {
 static std::atomic<uint32_t> MM_SND{0};
 // build 104: Settings switches (rollback.ini [ui]): menu sounds, menu music, connection info in a match
 static std::atomic<bool> g_menuSfx{true}, g_menuMusic{true}, g_netInfo{true}, g_musicReapply{false};
-static std::atomic<bool> g_borderless{false};   // build 110: [ui] borderless (windowed game shown as a borderless full-screen window)
+static std::atomic<bool> g_borderless{false}, g_borderlessFirst{false};   // build 110: [ui] borderless (windowed game shown as a borderless full-screen window)
 static void MmLoadPrefs() {
     static bool done = false;
     if (done) return;
@@ -42,7 +42,11 @@ static void MmLoadPrefs() {
     g_menuSfx = GetPrivateProfileIntW(L"ui", L"menu_sounds", 1, ini) != 0;
     g_menuMusic = GetPrivateProfileIntW(L"ui", L"menu_music", 1, ini) != 0;
     g_netInfo = GetPrivateProfileIntW(L"ui", L"connection_info", 1, ini) != 0;
-    g_borderless = GetPrivateProfileIntW(L"ui", L"borderless", 0, ini) != 0;
+    {   // build 111: Borderless is the default (first start with this build: no setting yet)
+        int b = GetPrivateProfileIntW(L"ui", L"borderless", -1, ini);
+        if (b < 0) { g_borderlessFirst = true; b = 1; WritePrivateProfileStringW(L"ui", L"borderless", L"1", ini); }
+        g_borderless = b != 0;
+    }
 #endif
 }
 static bool MmNetInfoOn() { MmLoadPrefs(); return g_netInfo.load(); }

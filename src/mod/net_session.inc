@@ -141,6 +141,9 @@ static struct NetS {
     uint32_t stalls = 0, timeStalls = 0, sent = 0, recvd = 0, desyncs = 0, fpOk = 0, fpFalse = 0, srandIgnored = 0;
     uint32_t badPackets = 0, otherPath = 0;
     uint32_t waited = 0, waitMs = 0, lastStallFrame = 0, seenDesyncs = 0;
+    // build 111: switched away from a full-screen game (the game stops while it has no screen)
+    volatile uint32_t peerAwaySince = 0;   // the other player's "I'm away" pings started (0 = not away)
+    volatile uint32_t gameTick = 0;          // last time the game thread looked at the network
     char lastDesync[96] = "";
 } N;
 
@@ -796,6 +799,29 @@ static void NetRestoreGame() {
 }
 static void DcOnEnd(const char* why);   // build 108: the "connection lost" pop-up (overlay.inc)
 static bool g_byeClosing = false;       // build 108: our BYE says "closed the game" (flags 1)
+static const uint32_t NET_AWAY_MS = 30000;   // build 111: how long the other player may be switched away
+static std::atomic<bool> g_closeReq{false};  // build 111: the window is closing (window thread asks the game thread)
+// Build 111: in full screen the game stops completely while it has no screen (alt-tab: the
+// frame loop sleeps while byte 0x051CACEA, "device lost", is set). This thread then keeps the
+// session alive: an "I'm away" ping (flags 2) every 300 ms. Only sends; it never reads.
+static DWORD WINAPI NetAwayThread(void*) {
+    uint32_t sent = 0;
+    for (;;) {
+        Sleep(300);
+        if (N.st != NS_ON || !N.tr && !N.loop) { sent = 0; continue; }
+        uint32_t now = GetTickCount();
+        bool lost = *reinterpret_cast<volatile uint8_t*>(0x051CACEA) != 0;
+        if (!lost || now - N.gameTick < 600) { if (sent) { Log("net: game running again after %u away pings", sent); sent = 0; } continue; }
+        if (N.loop) { sent++; continue; }       // (loopback: the stand-in lives in this game)
+        NPing m{};
+        m.h = MakeHdr(M_PING);
+        m.h.flags = 2;
+        m.t = now;
+        N.tr->Send(&m, sizeof m);
+        if (sent++ == 0) Log("net: this game has no screen (switched away); keeping the session alive");
+    }
+    return 0;
+}
 static void NetEnd(const char* why) {
     if (N.st == NS_OFF) return;
     DcOnEnd(why);
@@ -891,6 +917,11 @@ static void NetBecomeOn() {
     SsStart();
 }
 static void NetStart() {
+    {   // build 111
+        static bool awayThread = false;
+        if (!awayThread) { awayThread = true; CreateThread(nullptr, 0, NetAwayThread, nullptr, 0, nullptr); }
+    }
+    N.peerAwaySince = 0;
     if (N.st != NS_OFF) return;
     LoadNetSettings();
     N = NetS();
@@ -961,6 +992,12 @@ static void NetHandle(const uint8_t* p, int n) {
     if (N.st != NS_ON) return;
     N.recvd++;
     N.lastRecv = GetTickCount();
+    if (h->type == M_PING && (h->flags & 2)) {            // build 111: the other player's game has no screen right now
+        if (!N.peerAwaySince) { N.peerAwaySince = N.lastRecv | 1; Log("net: the other player switched away from the game (full screen)"); }
+    } else if (h->type != M_PONG && N.peerAwaySince) {
+        Log("net: the other player is back after %u ms", N.lastRecv - N.peerAwaySince);
+        N.peerAwaySince = 0;
+    }
     switch (h->type) {
     case M_INPUT: {
         if (n < (int)offsetof(NInput, in)) { N.badPackets++; return; }
@@ -1283,7 +1320,10 @@ static NetAct NetBeforeInput() {
         return NetAct::Free;
     }
     if (N.st != NS_ON) return NetAct::Free;
+    if (now - N.gameTick > 1000) N.lastRecv = now;  // build 111: this game had no screen (switched away); don't count that time
+    N.gameTick = now;
     if (now - N.lastRecv > (uint32_t)g_ncfg.timeoutMs) { NetEnd("no packets from the other game for a while"); return NetAct::Free; }
+    if (N.peerAwaySince && now - N.peerAwaySince > NET_AWAY_MS) { NetEnd("the other player switched away for too long"); return NetAct::Free; }
     if (now - N.lastPing > 1000) {
         NPing m{};
         m.h = MakeHdr(M_PING);
