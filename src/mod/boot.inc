@@ -192,6 +192,34 @@ static void __cdecl H_DlgDraw() {
     if (g_postOn.load() || (st == B_FIGHT && postFight)) return;
     reinterpret_cast<void(__cdecl*)()>(FN_DLG_DRAW)();
 }
+// Build 107c: the loading screen's Knight set menu (the game's preset picker, object
+// 0x051EAA40) is not used by our matches (each player's 3 Knights are set in our setup).
+// Loading state 1 calls its update (0x5E2D20, thiscall, 3 args) every frame and moves on
+// once it says "done" (byte 0x051EAA72); the loading screen's draw calls its draw
+// (0x5E3150). In our booted matches the update is not run and says "done" at once (no
+// menu, no cursor or confirm sounds, no preset written over our Knights) and nothing is drawn.
+static const uint32_t CALL_KS_UPDATE = 0x005C05BB, FN_KS_UPDATE = 0x005E2D20;
+static const uint32_t CALL_KS_DRAW = 0x005C081F, FN_KS_DRAW = 0x005E3150;
+static const uint32_t KS_DONE = 0x051EAA72;
+static int ksSkips = 0;
+static void __attribute__((thiscall)) H_KsUpdate(void* self, int a, int b, int c) {
+    if (st == B_LOADING) {
+        *reinterpret_cast<uint8_t*>(KS_DONE) = 1;
+        if (ksSkips++ == 0) Log("boot: loading screen: the game's Knight set menu is skipped (our Knights are kept)");
+        return;
+    }
+    reinterpret_cast<void(__attribute__((thiscall))*)(void*, int, int, int)>(FN_KS_UPDATE)(self, a, b, c);
+}
+static void __attribute__((thiscall)) H_KsDraw(void* self) {
+    if (st == B_LOADING) return;
+    reinterpret_cast<void(__attribute__((thiscall))*)(void*)>(FN_KS_DRAW)(self);
+}
+static bool HookCall(uint32_t at, uint32_t fn, void* to) {
+    uint8_t e[5] = {0xE8};
+    int32_t rel = (int32_t)(fn - (at + 5));
+    memcpy(e + 1, &rel, 4);
+    return util::BytesMatch(at, e, 5) && util::WriteRel32(at, 0xE8, to);
+}
 static void InstallBoxSkip() {
     int ok = 0;
     for (uint32_t a : CALLS_DLG_DONE) {
@@ -228,6 +256,10 @@ static bool HoldsTitle(void* screen) {
 
 static bool Install() {
     InstallBoxSkip();
+    {   // build 107c
+        bool u = HookCall(CALL_KS_UPDATE, FN_KS_UPDATE, (void*)H_KsUpdate), d = HookCall(CALL_KS_DRAW, FN_KS_DRAW, (void*)H_KsDraw);
+        Log("boot: Knight set menu on the loading screen: skip %s, hide %s", u ? "installed" : "OFF (unexpected bytes)", d ? "installed" : "OFF (unexpected bytes)");
+    }
     {   // build 107b
         uint8_t e[5] = {0xE8};
         int32_t rel = (int32_t)(FN_DLG_DRAW - (CALL_DLG_DRAW + 5));
@@ -399,6 +431,7 @@ static void Tick() {
             if (!AssistsOk()) { WriteAssists(); Log("boot: assists were different at fight start, written again"); }
             SetState(B_FIGHT);
             FightStarts();
+            ksSkips = 0;
             break;
         }
         if (vt == VT_LOADING && !AssistsOk()) {
