@@ -127,6 +127,12 @@ static void StartMusic() {
     Log("sound: menu music %s%s", MENU_MUSIC, M.music ? "" : " did not start");
 }
 
+// build 108: the connection lost pop-up (one of the game's menu sounds; off with the menu sounds)
+static void PlayAlert() {
+    if (!BankReady() || !g_menuSfx.load()) return;
+    FindCues();
+    Play(M.sfxCue[2], false);
+}
 // game thread, every frame: our menu open or not
 static void Tick(bool menuOpen) {
     if (menuOpen && !M.active) {

@@ -163,6 +163,52 @@ static bool KeyPressed(int vk);
         prev[i] = v;
     }
 }
+// Build 108: connection trouble. Game thread: DcOnEnd (from NetEnd) opens the pop-up and,
+// in a fight or on the loading screen, holds that screen (H_ChildUpdate) until OK; then
+// g_dcExit ends the fight (boot.inc) and the game goes back to the title = our main menu.
+static struct DcState {
+    std::atomic<bool> show{false};
+    uint8_t why = 0;
+    bool inMatch = false;
+    char name[32] = "";
+    double openT = -1;
+    uint32_t prevNav = 0;
+} DC;
+static std::atomic<bool> g_dcFreeze{false}, g_dcExit{false}, g_dcSound{false};
+static std::atomic<uint32_t> g_dcWaitMs{0};   // in step with the other game: ms since its last packet
+static bool g_uiBlock = false;                 // drawing thread: menus get no input under the pop-up
+static bool BootInMatch();
+namespace snd { static void PlayAlert(); }
+static void DcOnEnd(const char* why) {
+    static const struct { const char* s; uint8_t c; } kMap[] = {
+        {"the other player left", 0}, {"the other player closed the game", 1}, {"the other game restarted", 1},
+        {"no packets from the other game for a while", 2},
+        {"the other player has a different mod build", 3}, {"the other player's game version is different", 3},
+        {"the two games went to different screens", 4}, {"the saved data did not get across", 4},
+        {"the two games' saved data have different sizes", 4}};
+    int c = -1;
+    for (auto& m : kMap) if (!strcmp(m.s, why)) c = m.c;
+    if (c < 0) return;                                  // we ended it ourselves
+    if (N.st != NS_ON && c != 3) return;                // never got connected
+    char nm[32] = "";
+    EnterCriticalSection(&g_lobbyLock);
+    if (LB.haveThem && LB.them.name[0]) snprintf(nm, sizeof nm, "%s", LB.them.name);
+    LeaveCriticalSection(&g_lobbyLock);
+    snprintf(DC.name, sizeof DC.name, "%s", nm[0] ? nm : "The other player");
+    DC.why = (uint8_t)c;
+    DC.inMatch = BootInMatch();
+    uint32_t vt, ptr;
+    CurScreen(&vt, &ptr);
+    bool hold = DC.inMatch && (vt == SCENE_BTL || vt == 0x008D2604 /*Loading*/);
+    g_dcFreeze = hold;
+    g_dcExit = false;
+    DC.openT = -1;
+    DC.show = true;
+    g_dcSound = true;
+    Log("ui: connection lost pop-up (%s; name \"%s\", in a match %s, %s held)", why, DC.name, DC.inMatch ? "yes" : "no",
+        hold ? addr::SceneName(vt) : "no screen");
+}
+
 // Every frame on the game thread (from PollHotkeys), also when the window is in the background.
 static uint32_t g_presents = 0;
 static volatile bool g_holdTitle = false;   // build 101: our main menu covers the title screen; keep it on hold
@@ -215,6 +261,7 @@ static void UiGameThreadTick(bool focused) {
         snd::SetLog(!inSynced && g_mode == Mode::Idle && !g_auto && !NetOn());
         if (!hookTried && snd::BankReady()) { hookTried = true; HookSoundBank(); }
         snd::Tick(PgIsOpen());
+        if (g_dcSound.exchange(false)) snd::PlayAlert();   // build 108
         net::RoomTick((int)NET_BUILD);   // build 100: Steam rooms (lobbies)
     }
     if (toggle) {
@@ -229,7 +276,9 @@ static void UiGameThreadTick(bool focused) {
     // the game's own synced screens (old menu path) and tests: overlay steps aside
     if (U.visible && (inSynced || g_mode != Mode::Idle || g_auto)) { U.visible = false; U.drain = true; Log("ui: overlay hidden (game screen in step / test running)"); }
     U.capture = (U.visible.load() && focused && !inSynced && g_mode == Mode::Idle && !g_auto) ||
-                (g_postOn.load() && focused);   // build 107: the after-match screen over the fight
+                (g_postOn.load() && focused) ||  // build 107: the after-match screen over the fight
+                (DC.show.load() && focused);     // build 108: connection lost pop-up
+    g_dcWaitMs = (N.st == NS_ON && N.syncedType) ? GetTickCount() - N.lastRecv : 0;
     // requests
     int c = U.cmd.exchange(0);
     if (c == 1 && N.st == NS_OFF) {
@@ -369,6 +418,11 @@ static void UiCursorOnWindowThread(HWND h, bool cap) {
 }
 
 static LRESULT CALLBACK UiWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    // build 108: closing the game tells the other player so (instead of an 8 s time-out there)
+    if (msg == WM_CLOSE && N.st != NS_OFF) {
+        if (OnGameThread()) { g_byeClosing = true; NetEnd("you closed the game"); }
+        else Log("net: window closing on another thread than the game's; the other player will see a time-out");
+    }
     if (g_imgui) {
         bool cap = U.capture.load();
         UiCursorOnWindowThread(h, cap);
@@ -904,6 +958,7 @@ static void UiStatusBar(const ImVec2& disp) {
 #include "canvas.inc"   // build 106: was playground.inc
 #include "menu.inc"
 #include "postui.inc"   // build 107: after-match screen
+#include "dcui.inc"     // build 108: connection lost pop-up + waiting banner
 #ifndef UI_HARNESS
 #include "sound.inc"
 #endif
@@ -936,6 +991,38 @@ static void UiLoadFonts(float scale) {
     g_fUi = load("SairaSemiCondensed-Regular.ttf", MM_UI_PX);
     g_fUiBold = load("SairaSemiCondensed-Bold.ttf", MM_UI_PX);
     io.Fonts->Build();
+}
+
+// Build 108: the waiting banner and the connection lost pop-up (drawing thread)
+static void DcFrame() {
+    double now = ImGui::GetTime();
+    if (DC.show.load()) {
+        if (DC.openT < 0) { DC.openT = now; DC.prevNav = 0xFFFFFFFFu; }   // buttons held from the fight don't count
+        float t = (float)(now - DC.openT);
+        DcPopup(DC.name, DC.why, DC.inMatch, t);
+        uint32_t nb = U.capture.load() ? U.navBits : 0, fresh = nb & ~DC.prevNav;
+        DC.prevNav = nb;
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 m = io.MousePos, a = CP(DC_OK_X0, DC_OK_Y0), b = CP(DC_OK_X1, DC_OK_Y1);
+        bool click = ImGui::IsMouseClicked(0) && m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y;
+        bool ok = (fresh & PB_A) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Enter]) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Space]) || click;
+        if (ok && t > 0.6f) {
+            bool held = g_dcFreeze.exchange(false);
+            if (held) g_dcExit = true;
+            DC.show = false;
+            Log("ui: connection lost pop-up: OK (%s)", held ? "ending the fight, back to the main menu" : "nothing held");
+        }
+        return;
+    }
+    uint32_t w = g_dcWaitMs.load(), lim = (uint32_t)g_ncfg.timeoutMs;
+    static double since = -1;
+    if (w < 1000 || w >= lim) { since = -1; return; }
+    if (since < 0) since = now;
+    static char nm[32];
+    EnterCriticalSection(&g_lobbyLock);
+    snprintf(nm, sizeof nm, "%s", LB.haveThem && LB.them.name[0] ? LB.them.name : "the other player");
+    LeaveCriticalSection(&g_lobbyLock);
+    DcBanner(nm, (int)((lim - w + 999) / 1000), (float)(now - since));
 }
 
 static void UiFrame(IDirect3DDevice9* dev) {
@@ -1017,7 +1104,9 @@ static void UiFrame(IDirect3DDevice9* dev) {
     }
     bool post = g_postOn.load();   // build 107
     if (!post) PM.wasOn = false;
-    io.MouseDrawCursor = (show || post) && cap && g_softCursor.load();
+    bool dc = DC.show.load();      // build 108
+    g_uiBlock = dc;
+    io.MouseDrawCursor = (show || post || dc) && cap && g_softCursor.load();
     if (cap) {
         uint32_t b = U.navBits;
         io.NavInputs[ImGuiNavInput_Activate] = (b & PB_A) ? 1.0f : 0.0f;
@@ -1043,6 +1132,7 @@ static void UiFrame(IDirect3DDevice9* dev) {
     else if (show && PG.open.load()) MmFrame();
     else if (show) UiMainPanel(io.DisplaySize);
     else UiStatusBar(io.DisplaySize);
+    DcFrame();
     ImGui::PopFont();
     ImGui::EndFrame();
 }

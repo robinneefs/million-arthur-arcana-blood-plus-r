@@ -240,6 +240,7 @@ struct LPkt { uint32_t at; uint16_t n; uint8_t d[1100]; };
 static std::vector<LPkt> g_loopOut, g_loopIn;
 static uint32_t g_loopRng = 0xC0FFEE;
 static uint32_t LoopRand() { g_loopRng = g_loopRng * 1103515245u + 12345u; return (g_loopRng >> 16) & 0x7FFF; }
+static bool g_loopMute = false;   // build 108 test (see LoopRecv)
 static void LoopQueue(std::vector<LPkt>& q, const void* p, int n) {
     if (n > 1100) return;
     if (g_ncfg.loopLoss > 0 && (int)(LoopRand() % 100) < g_ncfg.loopLoss) return;
@@ -362,6 +363,9 @@ static void LoopTick() {
     }
 }
 static int LoopRecv(void* buf, int cap) {
+    // build 108 test: in the loopback test, holding Insert (game window in front) = the other
+    // player's packets stop coming (hiccup banner, then the 8 s time-out)
+    if (g_loopMute) { g_loopIn.clear(); return -1; }
     for (size_t i = 0; i < g_loopIn.size(); i++) {
         if ((int32_t)(GetTickCount() - g_loopIn[i].at) < 0) continue;
         int n = g_loopIn[i].n;
@@ -790,14 +794,18 @@ static void NetRestoreGame() {
     *(uint8_t*)G_SLOT_SWAP = N.origSwap;
     N.saved = false;
 }
+static void DcOnEnd(const char* why);   // build 108: the "connection lost" pop-up (overlay.inc)
+static bool g_byeClosing = false;       // build 108: our BYE says "closed the game" (flags 1)
 static void NetEnd(const char* why) {
     if (N.st == NS_OFF) return;
+    DcOnEnd(why);
     Log("net: session ends (%s). Packets sent %u, received %u; waited for input %u times (%u ms), %u frames skipped, %u frames slowed to keep the clocks together",
         why, N.sent, N.recvd, N.waited, N.waitMs, N.stalls, N.timeStalls);
     Log("net:   desync check: %u fingerprints matched, %u matched once pointers were left out, %u DESYNCS; game srand calls ignored %u; %u bad packets; %u date reads by the game logic (fixed per screen)",
         N.fpOk, N.fpFalse, N.desyncs, N.srandIgnored, N.badPackets, g_logicTimeCalls);
     if (N.trackingWas >= 0) { g_cfg.dirtyTracking = N.trackingWas != 0; N.trackingWas = -1; }
     NHdr b = MakeHdr(M_BYE);
+    b.flags = g_byeClosing ? 1 : 0;
     for (int i = 0; i < 3; i++) NetSend(&b, sizeof b);
     if (g_mode == Mode::SyncTest) SyncTestStop("network session ended");
     else if (g_mode == Mode::Profiling) ProfileStop();
@@ -1013,7 +1021,7 @@ static void NetHandle(const uint8_t* p, int n) {
         break;
     }
     case M_BYE:
-        NetEnd("the other player left");
+        NetEnd(h->flags == 1 ? "the other player closed the game" : "the other player left");
         break;
     case M_LOBBY:
     case M_START:
