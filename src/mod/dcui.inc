@@ -6,7 +6,7 @@
 //   words and A OK.
 // ===========================================================================
 
-enum : uint8_t { DCW_LEFT = 0, DCW_CLOSED, DCW_TIMEOUT, DCW_VERSION, DCW_OTHER };
+enum : uint8_t { DCW_LEFT = 0, DCW_CLOSED, DCW_TIMEOUT, DCW_VERSION, DCW_OTHER, DCW_AWAY };
 
 static float DcEase(float t, float start, float len) {
     float v = ImClamp((t - start) / len, 0.0f, 1.0f);
@@ -27,7 +27,7 @@ static void DcSpinner(ImDrawList* dl, float cx, float cy, float r, float now, fl
 }
 
 // t: seconds since the packets stopped coming; secsLeft: whole seconds before giving up
-static void DcBanner(const char* name, int secsLeft, float t) {
+static void DcBanner(const char* name, int secsLeft, float t, const char* why = "The connection is not responding") {
     const MmPal& P = MmP();
     float now = (float)ImGui::GetTime(), in = DcEase(t, 0.0f, 0.25f);
     ImDrawList* dl = ImGui::GetForegroundDrawList();
@@ -42,7 +42,7 @@ static void DcBanner(const char* name, int secsLeft, float t) {
     snprintf(who, sizeof who, "WAITING FOR %s", name);
     for (char* p = who; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
     MmText(dl, g_fMenu, 17, x0 + 100, y0 + 30, MmC(P.text, in), who, 0, 1, MmC(P.ink, in));
-    MmText(dl, g_fUi, 24, x0 + 100, y0 + 58, MmC(P.dim, in), "The connection is not responding");
+    MmText(dl, g_fUi, 24, x0 + 100, y0 + 58, MmC(P.dim, in), why);
     snprintf(n, sizeof n, "%d", secsLeft);
     float pulse = 0.8f + 0.2f * sinf(now * IM_PI * 2);
     MmText(dl, g_fMenu, 40, x1 - 54, (y0 + y1) * 0.5f, MmC(P.selOut, in), n, 1, 4, MmC(P.selOut, in));
@@ -58,6 +58,7 @@ static void DcReason(char* out, size_t n, uint8_t why, const char* name, bool in
     case DCW_CLOSED:  snprintf(out, n, "%s closed the game.", name); break;
     case DCW_TIMEOUT: snprintf(out, n, "The connection to %s stopped responding.", name); break;
     case DCW_VERSION: snprintf(out, n, "%s has a different version of the mod.", name); break;
+    case DCW_AWAY:   snprintf(out, n, "%s switched away from the game for too long.", name); break;
     default:         snprintf(out, n, "The connection to %s was lost.", name); break;
     }
 }

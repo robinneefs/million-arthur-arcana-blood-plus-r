@@ -175,7 +175,7 @@ static struct DcState {
     uint32_t prevNav = 0;
 } DC;
 static std::atomic<bool> g_dcFreeze{false}, g_dcExit{false}, g_dcSound{false};
-static std::atomic<uint32_t> g_dcWaitMs{0};   // in step with the other game: ms since its last packet
+static std::atomic<uint32_t> g_dcWaitMs{0}, g_dcAwayMs{0};   // in step with the other game: ms since its last packet
 static bool g_uiBlock = false;                 // drawing thread: menus get no input under the pop-up
 static bool BootInMatch();
 namespace snd { static void PlayAlert(); }
@@ -185,7 +185,7 @@ static void DcOnEnd(const char* why) {
         {"no packets from the other game for a while", 2},
         {"the other player has a different mod build", 3}, {"the other player's game version is different", 3},
         {"the two games went to different screens", 4}, {"the saved data did not get across", 4},
-        {"the two games' saved data have different sizes", 4}};
+        {"the two games' saved data have different sizes", 4}, {"the other player switched away for too long", 5}};
     int c = -1;
     for (auto& m : kMap) if (!strcmp(m.s, why)) c = m.c;
     if (c < 0) return;                                  // we ended it ourselves
@@ -281,6 +281,8 @@ static void UiGameThreadTick(bool focused) {
                 (g_postOn.load() && focused) ||  // build 107: the after-match screen over the fight
                 (DC.show.load() && focused);     // build 108: connection lost pop-up
     g_dcWaitMs = (N.st == NS_ON && N.syncedType) ? GetTickCount() - N.lastRecv : 0;
+    g_dcAwayMs = (N.st == NS_ON && N.peerAwaySince) ? GetTickCount() - N.peerAwaySince : 0;   // build 111
+    if (g_closeReq.load() && N.st != NS_OFF) { g_byeClosing = true; NetEnd("you closed the game"); }   // build 111: asked by the window thread
     // requests
     int c = U.cmd.exchange(0);
     if (c == 1 && N.st == NS_OFF) {
@@ -464,7 +466,11 @@ static LRESULT CALLBACK UiWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     // build 108: closing the game tells the other player so (instead of an 8 s time-out there)
     if (msg == WM_CLOSE && N.st != NS_OFF) {
         if (OnGameThread()) { g_byeClosing = true; NetEnd("you closed the game"); }
-        else Log("net: window closing on another thread than the game's; the other player will see a time-out");
+        else {   // build 111: the game thread says goodbye (UiGameThreadTick); wait for it a moment
+            g_closeReq = true;
+            for (int i = 0; i < 60 && N.st != NS_OFF; i++) Sleep(5);
+            Log("net: window closing: goodbye %s", N.st == NS_OFF ? "sent" : "not sent in time (the other player will see a time-out)");
+        }
     }
     if (g_imgui) {
         bool cap = U.capture.load();
@@ -1047,6 +1053,19 @@ static void BorderlessTick(bool focused) {
                          Log("ui: started %s; borderless %s", bootWindowed ? "windowed" : "full screen", g_borderless.load() ? "on" : "off"); }
         HWND hw = *reinterpret_cast<HWND*>(addr::G_HWND);
         uint32_t now = GetTickCount();
+        if (g_borderlessFirst.load() && U.screenVt == VT_TITLE) {   // build 111: first start: Borderless by default
+            static uint32_t titleSince = 0;
+            if (!titleSince) titleSince = now;
+            if (now - titleSince > 2000) {
+                g_borderlessFirst = false;
+                if (!*reinterpret_cast<uint8_t*>(0x051CD27C)) {
+                    gcfg::State st;
+                    gcfg::Read(st);
+                    gcfg::SetWindowed(st, true);
+                    Log("ui: first start with Borderless as the default: the game switches from full screen to a window");
+                }
+            }
+        }
         gcfg::ApplyDisplayNow();               // build 110b: Settings > Display changes right away
         bool winNow = *reinterpret_cast<uint8_t*>(0x051CD27C) != 0;   // the mode the game runs in now
         static bool lastWin = winNow;
@@ -1111,15 +1130,17 @@ static void DcFrame() {
         }
         return;
     }
-    uint32_t w = g_dcWaitMs.load(), lim = (uint32_t)g_ncfg.timeoutMs;
+    uint32_t w = g_dcWaitMs.load(), lim = (uint32_t)g_ncfg.timeoutMs, away = g_dcAwayMs.load();
     static double since = -1;
+    const char* why = "The connection is not responding";
+    if (away > 0) { w = away; lim = NET_AWAY_MS; why = "Switched away from the game"; }   // build 111
     if (w < 1000 || w >= lim) { since = -1; return; }
     if (since < 0) since = now;
     static char nm[32];
     EnterCriticalSection(&g_lobbyLock);
     snprintf(nm, sizeof nm, "%s", LB.haveThem && LB.them.name[0] ? LB.them.name : "the other player");
     LeaveCriticalSection(&g_lobbyLock);
-    DcBanner(nm, (int)((lim - w + 999) / 1000), (float)(now - since));
+    DcBanner(nm, (int)((lim - w + 999) / 1000), (float)(now - since), why);
 }
 
 static void UiFrame(IDirect3DDevice9* dev) {
