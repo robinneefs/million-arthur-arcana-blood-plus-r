@@ -150,10 +150,10 @@ The version is set in `src/mod/version.h`. Settings for testing the netcode are 
 | `src/mod/` | The mod DLL that runs inside the game |
 | `src/launcher/` | The launcher that starts the game with the mod (and checks for updates) |
 | `installer/` | The NSIS installer script |
-| `tools/` | The release script |
+| `tools/` | The release and icon scripts |
 | `third_party/imgui/` | Dear ImGui 1.82, the UI library |
 | `fonts/` | Michroma and Saira Semi Condensed (SIL Open Font License) |
-| `assets/` | The logo |
+| `assets/` | The logo and the icon (`tools/make-icon.py` makes the .ico) |
 | `config/` | The `rollback.ini` and `README.txt` that ship with the mod |
 | `docs/` | How the mod works, developer settings, screenshots |
 

@@ -15,7 +15,8 @@ for f in imgui imgui_draw imgui_widgets imgui_tables backends/imgui_impl_dx9 bac
 done
 $CXX $FLAGS $IMGUI -Wall -Wno-attributes -shared -o build/arcana_rollback.dll \
   src/mod/mod.cpp src/mod/util.cpp src/mod/transport.cpp build/obj/*.o -lws2_32 -ldwmapi -lgdi32 -lole32 -lshell32
-$CXX $FLAGS -Wall -municode -mwindows -o build/arcana_launcher.exe src/launcher/launcher.cpp -lwinhttp -lbcrypt
+i686-w64-mingw32-windres src/launcher/launcher.rc -O coff -o build/obj/launcher_res.o
+$CXX $FLAGS -Wall -municode -mwindows -o build/arcana_launcher.exe src/launcher/launcher.cpp build/obj/launcher_res.o -lwinhttp -lbcrypt
 i686-w64-mingw32-strip build/arcana_rollback.dll build/arcana_launcher.exe
 cp config/rollback.ini assets/rollback_logo.png build/
 mkdir -p build/fonts && cp fonts/* build/fonts/
