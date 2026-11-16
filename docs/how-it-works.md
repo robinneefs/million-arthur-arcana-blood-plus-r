@@ -12,7 +12,7 @@ This is a short overview for people (or AIs) who want to build on the mod.
   - `transport.cpp` / `transport.h`: the network layer (loopback stand-in, home network UDP, Steam).
   - `lobby.inc`: the match setup protocol between the two players (lobby, ready, picks, start, rematch).
   - `boot.inc`: starts the fight from the overlay's settings and brings both players back to the overlay afterwards.
-  - `overlay.inc`: draws our UI on the game's Direct3D 9 device (Dear ImGui), the F1 overlay (connect and match setup until rooms take over), input capture.
+  - `overlay.inc`: draws our UI on the game's Direct3D 9 device (Dear ImGui), input capture, and the hooks that tie our screens (menu.inc, roomui.inc, setupui.inc, settingsui.inc, helpui.inc, postui.inc, dcui.inc, hudui.inc) to the game.
   - `canvas.inc`: the 1920x1080 design canvas our menus are laid out on, scaled to the game's resolution.
   - `menu.inc`: our main menu, which the game boots into (the game's own title screen is held while it is up), and its house style.
   - `roomui.inc`: rooms (Steam lobbies): room search, create room, the room screen.
@@ -21,7 +21,7 @@ This is a short overview for people (or AIs) who want to build on the mod.
   - `helpui.inc`: Help. `logpack.inc`: Pack logs (one zip with private details hidden).
   - `gameart.inc`: reads the game's menu pictures from the player's install (nothing is shipped). `sound.inc`: our menu music and sounds through the game's sound engine.
   - `version.h`: the version number, build number and links.
-  - `ui_theme.h`: colours, fonts and sizes of the F1 overlay.
+  - `ui_theme.h`: base Dear ImGui style (text fields); the look itself is in menu.inc.
   - `util.cpp` / `util.h`: logging, ini reading, small helpers.
   - `memlist_builtin.h`: the memory list (see below), built into the mod.
   - `perf.inc`, `heapdiag.inc`, `crashdiag.inc`, `vmfree.inc`: timing, heap and crash reports for the log.
@@ -55,7 +55,7 @@ At start-up the game normally shows logos, an intro and its title menu. The mod 
 
 ## Match setup
 
-The F1 overlay does the whole match setup itself: connect, lobby and ready, controls, character, colour, assist and stage picks, and rematch. Each side sends its full lobby state until the other confirms it. When both are ready, player 1 sends the final settings with a checksum and player 2 confirms them. The game's own menus and online lobbies are not used.
+Build 112+: a room table starts the match (roommatch.inc) and walks this lobby handshake by itself with each player's My setup. The handshake covers: connect, lobby and ready, controls, character, colour, assist and stage picks, and rematch. Each side sends its full lobby state until the other confirms it. When both are ready, player 1 sends the final settings with a checksum and player 2 confirms them. The game's own menus and online lobbies are not used.
 
 ## Booting into the fight
 
@@ -63,7 +63,7 @@ When the match setup is final, the mod takes the game from its main menu to the 
 
 ## Settings
 
-`config/rollback.ini` lists every setting with a comment. The mod reads `rollback.ini` from its own folder. The test keys (F4-F11: sync tests, profiling, loopback connect) only work with `[dev] tools=1`.
+`config/rollback.ini` is the short file players get (update check). Every other setting, with its default, is listed in `docs/dev-settings.md`; the mod reads `rollback.ini` from its own folder. The test keys (F4-F11: sync tests, profiling, loopback connect) only work with `[dev] tools=1`.
 
 ## Logs
 
