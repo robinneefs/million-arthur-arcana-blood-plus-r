@@ -615,7 +615,7 @@ static void MmRoomFrame() {
             }
         }
         if (changed) { net::RoomChange(ch); MM_SND |= 1; }
-        MmText(dl, g_fUi, 19, LX0 + 24 + ox, 430, MmC(P.faint, in), isHost ? "You are the host: click a setting to change it" : "Only the host can change these");
+        MmText(dl, g_fUi, 19, LX0 + 24 + ox, 430, MmC(P.faint, in), isHost ? "You are the host: click a setting or a player" : "Only the host can change these");
 
         MmSection(dl, LX0 + ox, 506, LX1 + ox, 962, "PLAYERS", in);
         for (int k = 0; k < R.nMembers && k < 7; k++) {
@@ -627,7 +627,19 @@ static void MmRoomFrame() {
             char where[24];   // build 112
         if (m.seat >= 0) snprintf(where, sizeof where, "%s %c", m.playing ? "PLAYING" : "TABLE", 'A' + m.seat / 2);
         else snprintf(where, sizeof where, "%s", m.me ? "YOU" : "IN ROOM");
-        MmText(dl, g_fMenu, 12, LX1 - 24 + ox, y, m.seat >= 0 ? MmC(P.dim, in) : MmC(P.faint, in), where, 2);
+        // build 113: the host clicks a player to remove them (a second click within 3 s confirms)
+        static uint64_t kickArm = 0;
+        static double kickAt = 0;
+        bool canKick = isHost && !m.me && !m.standin && !g_invOpen;
+        bool hovK = canKick && MmHover(LX0 + 10, y - 26, LX1 - 10, y + 26);
+        bool armed = kickArm == m.id && T.now - kickAt < 3.0;
+        if (hovK && io.MouseClicked[0]) {
+            if (armed) { net::RoomKick(m.id); kickArm = 0; MM_SND |= 4; }
+            else { kickArm = m.id; kickAt = T.now; MM_SND |= 1; armed = true; }
+        }
+        if (armed) MmPill(dl, LX1 - 70 + ox, y, 96, 26, "KICK?", MmRgb{230, 70, 60}, true, in);
+        else if (hovK) MmPill(dl, LX1 - 70 + ox, y, 96, 26, "KICK", MmRgb{230, 70, 60}, false, in);
+        else MmText(dl, g_fMenu, 12, LX1 - 24 + ox, y, m.seat >= 0 ? MmC(P.dim, in) : MmC(P.faint, in), where, 2);
         }
         if (R.nMembers > 7) { char s[32]; snprintf(s, sizeof s, "+ %d more", R.nMembers - 7); MmText(dl, g_fUi, 20, LX0 + 30 + ox, 920, MmC(P.dim, in), s); }
         MmPadButton(dl, LX0 + 20 + ox, 912, 'X', MmRGBA(40, 100, 200, in));

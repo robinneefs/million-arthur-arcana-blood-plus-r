@@ -17,6 +17,7 @@ struct PmView {
     int matchNo;
     float t;                  // seconds since the screen opened
     const char* status;       // instead of the description once both have chosen
+    int setLen;               // build 113: > 0 and this was the last game: only Back to room
 };
 static const float PM_Y = 846, PM_XS[2] = {560, 1010}, PM_WS[2] = {350, 470};   // the two choices (canvas)
 static const char* const PM_ITEMS[2] = {"REMATCH", "BACK TO ROOM"};
@@ -118,6 +119,13 @@ static void PmDraw(const PmView& v) {
     {
         const float Y = PM_Y, *XS = PM_XS, *WS = PM_WS;
         for (int i = 0; i < 2; i++) {
+            if (v.setLen > 0 && i == 0) {   // build 113: set over, no Rematch
+                float in = PmEase(t, 0.4f, 0.45f);
+                char s[48];
+                snprintf(s, sizeof s, "SET OVER (%d GAME%s)", v.setLen, v.setLen == 1 ? "" : "S");
+                MmText(dl, g_fMenu, 22, XS[0] + WS[0] - 60, Y + 28, MmC(P.faint, in), s, 2);
+                continue;
+            }
             float in = PmEase(t, 0.4f + 0.08f * i, 0.45f);
             bool on = v.sel == i;
             float h = on ? 1.0f : 0.0f;
@@ -140,7 +148,7 @@ static void PmDraw(const PmView& v) {
     MmLine(dl, -g_cvO.x / g_cv, 948, g_disp.x / g_cv, 3, MmC(P.acc, 0.95f));
     MmLine(dl, -g_cvO.x / g_cv, 952, g_disp.x / g_cv, 1, MmC(P.gold, 0.6f));
     dl->PopClipRect();
-    const char* help = v.status ? v.status : PM_HELP[v.sel];
+    const char* help = v.status ? v.status : v.setLen > 0 ? "That was the last game of this set. Back to the room, then READY for the next set." : PM_HELP[v.sel];
     MmText(dl, g_fUi, 30, 112, 986, MmC(P.bgBot, 0.6f), help);
     MmText(dl, g_fUi, 30, 110, 984, v.status ? MmC(P.gold) : MmC(P.text), help);
     if (!v.status) {
@@ -187,6 +195,8 @@ static void PmFrame() {
     v.choice[my] = map(me);
     v.choice[1 - my] = LB.haveThem ? map(them) : PM_NONE;
     bool open = me.phase == LP_POST;                  // still choosing (not agreed yet)
+    // build 113: the room's set length: after the last game only Back to room
+    if (g_roomCfg.on && g_roomCfg.setLen > 0 && (int)LB.postMatch >= g_roomCfg.setLen) { v.setLen = g_roomCfg.setLen; PM.sel = 1; }
     if (!open) v.status = me.phase == LP_MATCH ? "You both picked Rematch. Here we go!" : "Back to the room...";
     // input
     if (open) {
@@ -203,10 +213,10 @@ static void PmFrame() {
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_RightArrow]) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_DownArrow])) move = 1;
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Enter]) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Space])) act = true;
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Escape]) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Backspace])) back = true;
-        if (move) PM.sel = (PM.sel + 1) % 2;
+        if (move && !v.setLen) PM.sel = (PM.sel + 1) % 2;
         if (io.MousePos.x > -FLT_MAX / 2)
             for (int i = 0; i < 2; i++)
-                if (ImGui::IsMouseHoveringRect(CP(PM_XS[i] - 60, PM_Y - 16), CP(PM_XS[i] + PM_WS[i] + 20, PM_Y + 72))) {
+                if ((!v.setLen || i == 1) && ImGui::IsMouseHoveringRect(CP(PM_XS[i] - 60, PM_Y - 16), CP(PM_XS[i] + PM_WS[i] + 20, PM_Y + 72))) {
                     if (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) PM.sel = i;
                     if (io.MouseClicked[0]) { PM.sel = i; act = true; }
                 }

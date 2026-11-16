@@ -199,6 +199,13 @@ static int __cdecl H_DlgAnswer(int p) {
 static const uint32_t CALL_DLG_DRAW = 0x005BEF3F, FN_DLG_DRAW = 0x00596260;
 static void __cdecl H_DlgDraw() {
     if (g_postOn.load() || (st == B_FIGHT && postFight)) return;
+    // build 113 (test 112): boxes left over from the last fight (after Back to room) showed for
+    // a moment over the next match's VS screen: none of the game's boxes while a match boots
+    if (st == B_WAIT_TITLE || st == B_SWITCHING || st == B_LOADING || st == B_AFTER) {
+        static int logs = 0;
+        if (logs < 3 && st == B_LOADING) { logs++; Log("boot: the game's boxes are hidden on the loading screen"); }
+        return;
+    }
     reinterpret_cast<void(__cdecl*)()>(FN_DLG_DRAW)();
 }
 // Build 107c: the loading screen's Knight set menu (the game's preset picker, object
