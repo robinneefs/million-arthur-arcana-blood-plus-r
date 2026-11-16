@@ -142,13 +142,25 @@ static void SetVibration(State& s, bool on) {
     OptI(0x0C) = on ? 0 : 1;
     ApplyOptions();
 }
+// Build 110b: what the game's own options menu does on OK (0x5D2111..): 0x5D12B0 compares the
+// pending display {0x04DCACE0} with the running one (0x051CD274 w, +4 h, +8 windowed) and, if
+// they differ, asks the window code to switch (0x61F5B0(0x051CA9C0, w, h, windowed) + byte
+// 0x051CD270 = 1); the game's frame loop then changes the window / device itself. V-Sync is
+// only read at start-up (0x5D1280 just notes that a restart is needed).
+static std::atomic<bool> g_dispApply{false};
+static void ApplyDisplayNow() {
+    if (!g_dispApply.exchange(false)) return;
+    ((void(__cdecl*)())0x5D12B0)();
+    Log("settings: display change handed to the game (now %dx%d %s)", *(int*)0x051CD274, *(int*)0x051CD278, *(uint8_t*)0x051CD27C ? "windowed" : "fullscreen");
+}
 static void SetDisplay(State& s) {
     if (s.nRes <= 0) return;
     if (s.resIdx < 0 || s.resIdx >= s.nRes) s.resIdx = 0;
     int* p = (int*)PENDING;
     p[0] = s.resIdx; p[1] = s.res[s.resIdx].w; p[2] = s.res[s.resIdx].h; p[3] = s.windowed ? 1 : 0; p[4] = s.vsync ? 1 : 0;
     ((void(__cdecl*)())0x5D1190)();
-    Log("settings: display set to %dx%d %s, v-sync %d (after a restart)", p[1], p[2], s.windowed ? "windowed" : "fullscreen", p[4]);
+    g_dispApply = true;   // build 110b: resolution + mode change right away (game thread, see ApplyDisplayNow)
+    Log("settings: display set to %dx%d %s, v-sync %d (size and mode now, v-sync after a restart)", p[1], p[2], s.windowed ? "windowed" : "fullscreen", p[4]);
 }
 // windowed <-> fullscreen has its own list: keep the same size if it is there
 static void SetWindowed(State& s, bool windowed) {

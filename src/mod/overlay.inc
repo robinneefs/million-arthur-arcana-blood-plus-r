@@ -1047,9 +1047,13 @@ static void BorderlessTick(bool focused) {
                          Log("ui: started %s; borderless %s", bootWindowed ? "windowed" : "full screen", g_borderless.load() ? "on" : "off"); }
         HWND hw = *reinterpret_cast<HWND*>(addr::G_HWND);
         uint32_t now = GetTickCount();
-        if (hw && now - lastPost >= 1000) {
+        gcfg::ApplyDisplayNow();               // build 110b: Settings > Display changes right away
+        bool winNow = *reinterpret_cast<uint8_t*>(0x051CD27C) != 0;   // the mode the game runs in now
+        static bool lastWin = winNow;
+        if (winNow != lastWin) { lastWin = winNow; lastPost = 0; }
+        if (hw && now - lastPost >= (g_bl.on || !winNow ? 1000u : 250u)) {
             lastPost = now;
-            bool want = bootWindowed && g_borderless.load();
+            bool want = winNow && g_borderless.load();
             if (want || g_bl.on) PostMessageW(hw, WM_MOD_BORDERLESS, want ? 1 : 0, 0);
         }
         if (!focused) {
