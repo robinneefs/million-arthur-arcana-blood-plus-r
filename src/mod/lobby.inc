@@ -83,6 +83,7 @@ struct NLobby {
     uint32_t matchNo;                   // the match the phase belongs to
     uint32_t choiceMatch;               // the match the choice was made after
     char name[32];
+    uint32_t rematchAt;                 // build 107: player 1: the in-place rematch starts after this fight frame (0 = through the main menu)
 };
 struct MatchSettings {
     uint32_t matchNo;
@@ -105,6 +106,7 @@ struct LbSide {
     uint32_t matchNo = 0;
     uint32_t choiceMatch = 0;           // the choice stays visible after it happened, so the other PC can follow
     char name[32] = "";
+    uint32_t rematchAt = 0;             // build 107 (see NLobby)
 };
 static CRITICAL_SECTION g_lobbyLock;
 static struct Lobby {
@@ -122,7 +124,17 @@ static struct Lobby {
     bool leaveNow = false;              // "Leave" pressed (handled on the game thread)
     char note[160] = "";                // last thing that happened, for the overlay
     uint32_t noteAt = 0;
+    // build 107: after-match screen
+    uint32_t setWins[2] = {0, 0};       // fights won by player 1 / 2 since the last match setup
+    int8_t lastWinner = -1;             // of the last fight (-1 draw)
+    uint32_t postAt = 0;                // when the after-match screen came up (GetTickCount)
+    uint32_t postMatch = 0;             // the match the after-match screen is about
 } LB;
+// Build 107: the after-match screen is up (game thread sets it, the overlay draws it)
+static std::atomic<bool> g_postOn{false};
+static bool BootInPlaceOk();
+static void BootInPlaceArm(uint32_t matchNo, uint32_t at);
+static void BootAnswerNo();
 
 static void LbNote(const char* fmt, ...) {
     va_list ap; va_start(ap, fmt);
@@ -222,6 +234,7 @@ static void LbSend() {
     m.matchNo = LB.me.matchNo;
     m.choiceMatch = LB.me.choiceMatch;
     memcpy(m.name, LB.me.name, sizeof m.name);
+    m.rematchAt = LB.me.rematchAt;
     NetSend(&m, sizeof m);
     LB.lastSend = GetTickCount();
 }
@@ -250,6 +263,7 @@ static void LbHandle(const uint8_t* p, int n) {
             t.choiceMatch = m->choiceMatch;
             memcpy(t.name, m->name, sizeof t.name);
             t.name[sizeof t.name - 1] = 0;
+            t.rematchAt = m->rematchAt;
             LB.haveThem = true;
             if (first) LbNote("%s joined the lobby", t.name[0] ? t.name : "the other player");
             else {
@@ -265,6 +279,8 @@ static void LbHandle(const uint8_t* p, int n) {
             LB.sum = LbSum(LB.s);
             LB.haveSettings = true;
             LB.confirmed = 1;           // this side has player 1's settings by definition
+            LB.setWins[0] = LB.setWins[1] = 0;
+            LB.me.rematchAt = 0;
             LB.me.phase = LP_MATCH;
             LB.me.matchNo = LB.s.matchNo;
             LB.me.choice = LCH_NONE;
@@ -310,6 +326,8 @@ static void LbMakeSettings() {
     LB.sum = LbSum(s);
     LB.haveSettings = true;
     LB.confirmed = 0;
+    LB.setWins[0] = LB.setWins[1] = 0;
+    LB.me.rematchAt = 0;
 }
 static void LbSendStart() {
     NStart m{};
@@ -385,21 +403,41 @@ static void LobbyTick() {
         case LP_POST:
             if (me.choice != LCH_NONE && me.choiceMatch == me.matchNo && them.choice == me.choice && them.choiceMatch == me.matchNo) {
                 uint8_t c = me.choice;
-                LbNote("both chose: %s", LB_CHOICE_NAME[c]);
                 if (c == LCH_REMATCH) {
+                    // Build 107: in place (the game's own rematch, no main menu / loading screen)
+                    // when both PCs are still in the fight's result phase. Player 1 picks the
+                    // fight frame after which both restart (1 s ahead, so player 2 hears in time);
+                    // player 2 follows player 1's message.
+                    bool inPlace = BootInPlaceOk();
+                    uint32_t at = 0;
+                    if (host) {
+                        if (inPlace) at = g_frame + 60;
+                    } else {
+                        if (!(them.phase == LP_MATCH && them.matchNo == me.matchNo + 1)) break;   // wait for player 1
+                        at = them.rematchAt;
+                        if (at && !inPlace) { LbNote("rematch: player 1 restarts in place but this fight is no longer there"); at = 0; }
+                    }
+                    LbNote("both chose: %s", LB_CHOICE_NAME[c]);
                     me.matchNo++;
                     LB.s.matchNo = me.matchNo;
                     LB.sum = LbSum(LB.s);
                     me.phase = LP_MATCH;
-                    LbNote("rematch: match %u, same settings (checksum %08X)", me.matchNo, LB.sum);
-                } else if (c == LCH_SETUP) {
-                    me.phase = LP_SETUP;
-                    me.locked = false;
-                } else if (c == LCH_LOBBY) {
-                    me.phase = LP_LOBBY;
-                    me.ready = me.locked = false;
-                } else if (c == LCH_LEAVE) {
-                    leave = true;
+                    me.rematchAt = at;
+                    if (at) BootInPlaceArm(me.matchNo, at);
+                    else BootAnswerNo();    // still in the fight: end it, the rematch boots from the main menu
+                    LbNote("rematch: match %u, same settings (checksum %08X)%s", me.matchNo, LB.sum, at ? ", right away in this fight" : ", through the loading screen");
+                } else {
+                    LbNote("both chose: %s", LB_CHOICE_NAME[c]);
+                    if (c == LCH_SETUP || c == LCH_LOBBY) { BootAnswerNo(); LB.setWins[0] = LB.setWins[1] = 0; }
+                    if (c == LCH_SETUP) {
+                        me.phase = LP_SETUP;
+                        me.locked = false;
+                    } else if (c == LCH_LOBBY) {
+                        me.phase = LP_LOBBY;
+                        me.ready = me.locked = false;
+                    } else if (c == LCH_LEAVE) {
+                        leave = true;
+                    }
                 }
                 LbChanged();                // (the choice stays in the messages until the next match ends)
             }

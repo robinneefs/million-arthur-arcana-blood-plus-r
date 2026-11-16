@@ -1417,10 +1417,19 @@ static NetAct NetBeforeInput() {
 static bool g_childRan = false;              // the current screen's own update ran this frame
 static uint32_t HeldMask(uint32_t pad);
 // Called from the keyboard-read hook in the first run of frame T's input step.
+static bool BootZeroInput();   // boot.inc (build 107)
+static std::atomic<uint32_t> g_postNav{0};   // build 107: this PC's controller on the after-match screen
 static void NetFill(uint32_t T) {
     uint32_t d = N.localDev;
     uint32_t raw0 = d < addr::PAD_COUNT ? PadU32(d, addr::PAD_RAW0) : 0;
     uint32_t raw1 = d < addr::PAD_COUNT ? PadU32(d, addr::PAD_RAW1) : 0;
+    if (BootZeroInput()) {
+        // Build 107: the after-match screen is up over the fight: this controller drives
+        // our screen, and the game gets no input from either player (the same zeros on
+        // both PCs, so the result phase runs the same while both choose)
+        g_postNav = raw0;
+        raw0 = raw1 = 0;
+    }
     if (N.sceneVt == SCENE_BTL && T < 7200 && N.diagN < 150) {
         // Build 49: what this PC's controller reads in the first two minutes of each fight
         HWND hwnd = *reinterpret_cast<HWND*>(addr::G_HWND);

@@ -228,7 +228,8 @@ static void UiGameThreadTick(bool focused) {
     // opens our main menu straight away instead, above)
     // the game's own synced screens (old menu path) and tests: overlay steps aside
     if (U.visible && (inSynced || g_mode != Mode::Idle || g_auto)) { U.visible = false; U.drain = true; Log("ui: overlay hidden (game screen in step / test running)"); }
-    U.capture = U.visible.load() && focused && !inSynced && g_mode == Mode::Idle && !g_auto;
+    U.capture = (U.visible.load() && focused && !inSynced && g_mode == Mode::Idle && !g_auto) ||
+                (g_postOn.load() && focused);   // build 107: the after-match screen over the fight
     // requests
     int c = U.cmd.exchange(0);
     if (c == 1 && N.st == NS_OFF) {
@@ -902,6 +903,7 @@ static void UiStatusBar(const ImVec2& disp) {
 
 #include "canvas.inc"   // build 106: was playground.inc
 #include "menu.inc"
+#include "postui.inc"   // build 107: after-match screen
 #ifndef UI_HARNESS
 #include "sound.inc"
 #endif
@@ -1013,7 +1015,9 @@ static void UiFrame(IDirect3DDevice9* dev) {
         }
         if (g_softCursor.load()) io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;   // don't fight over the shape
     }
-    io.MouseDrawCursor = show && cap && g_softCursor.load();
+    bool post = g_postOn.load();   // build 107
+    if (!post) PM.wasOn = false;
+    io.MouseDrawCursor = (show || post) && cap && g_softCursor.load();
     if (cap) {
         uint32_t b = U.navBits;
         io.NavInputs[ImGuiNavInput_Activate] = (b & PB_A) ? 1.0f : 0.0f;
@@ -1035,7 +1039,8 @@ static void UiFrame(IDirect3DDevice9* dev) {
     ImGui::NewFrame();
     ImGui::PushFont(g_fBody);
     if (!(show && PG.open.load())) MM.wasOpen = false;   // intro plays again next time
-    if (show && PG.open.load()) MmFrame();
+    if (post) PmFrame();
+    else if (show && PG.open.load()) MmFrame();
     else if (show) UiMainPanel(io.DisplaySize);
     else UiStatusBar(io.DisplaySize);
     ImGui::PopFont();
