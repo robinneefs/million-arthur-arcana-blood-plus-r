@@ -5,7 +5,7 @@
 #define MOD_VERSION "0.1.0-beta"
 #define MOD_VERSION_SHORT "v0.1.0 BETA"
 #define MOD_VERSION_NUM "v0.1.0"
-#define MOD_BUILD 117
+#define MOD_BUILD 118
 #define MOD_REPO_URL "https://github.com/robinneefs/million-arthur-arcana-blood-plus-r"
 #define MOD_WIKI_URL "https://mizuumi.wiki/w/Million_Arthur:_Arcana_Blood"
 #define MOD_STEAM_URL "https://store.steampowered.com/app/989550/Million_Arthur_Arcana_Blood/"
