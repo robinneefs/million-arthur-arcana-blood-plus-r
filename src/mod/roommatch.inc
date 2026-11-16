@@ -164,6 +164,7 @@ static void RoomMatchTick(uint32_t vt) {
     g_roomCfg.loop = p->standin;
     g_roomCfg.peer = p->standin ? 0 : p->id;
     g_roomCfg.side = R.mySeat & 1;
+    g_roomCfg.setLen = R.set.setLen;   // build 113: games in a set (0 = no limit)
     RM.table = R.mySeat / 2;
     RM.peer = p->id;
     RM.started = false;

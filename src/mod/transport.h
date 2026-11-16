@@ -95,5 +95,7 @@ void RoomSetReady(bool on);
 void RoomSetMyData(const char* key, const char* val);   // other member data: "su" setup, "play", "sc" score
 void RoomStandIn(bool on);                   // [dev] room_standin=1: a test player sits across from you
 void RoomSystemLine(const char* text);       // a grey line in the room chat, only on this PC
+// ---- Build 113 ----
+void RoomKick(uint64_t member);              // host only: that player's game leaves the room and can't come back
 
 } // namespace net

@@ -325,6 +325,13 @@ static struct {
     int nData = 0;
 } RQ;
 static bool g_standIn = false;
+// build 113: kicks. Steam has no kick for lobbies, so the host sends a hidden chat line
+// "\x01KICK:<steam id>"; that player's game leaves by itself. The host remembers who was
+// kicked and sends it again if they come back (until the host leaves the room).
+static uint64_t g_kicked[16];
+static int g_nKicked = 0;
+static uint32_t g_kickSentAt = 0;
+static uint64_t g_kickReq = 0;
 static int g_standInSeat = -1;
 static void QueueData(const char* k, const char* v) {
     // caller holds g_rlock
@@ -381,6 +388,30 @@ static void OnChat(const void* pv) {
     if (logged < 5) { logged++; Log("room: chat callback (id %u, %d bytes, type %d)", m->chatId, n, type); }
     if (n <= 0 || type != 1) return;   // 1 = chat message
     buf[n] = 0;
+    if (buf[0] == 1) {                 // build 113: our own messages, not shown
+        unsigned long long target = 0;
+        if (sscanf(buf + 1, "KICK:%llu", &target) == 1) {
+            uint64_t owner = pGetLobbyOwner(g_mm, m->lobby);
+            if (who != owner) return;
+            RLock l;
+            if (target == g_me) {
+                Log("room: the host removed you from the room");
+                pLeaveLobby(g_mm, RV.id);
+                RV.id = 0; RV.nMembers = 0; g_nLast = 0;
+                RV.state = ROOM_FAILED;
+                snprintf(RV.err, sizeof RV.err, "The host removed you from the room");
+            } else {
+                static uint64_t lastShown = 0;
+                if (lastShown != target) {
+                    lastShown = target;
+                    char s[96];
+                    snprintf(s, sizeof s, "%s was removed by the host", SteamFriendName(target));
+                    ChatAdd(target, "", s, true);
+                }
+            }
+        }
+        return;
+    }
     char name[48];
     snprintf(name, sizeof name, "%s", SteamFriendName(who));
     RLock l;
@@ -650,6 +681,7 @@ void RoomTick(int build) {
         RQ.leave = false;
         if (RV.id) { pLeaveLobby(g_mm, RV.id); Log("room: left room %llu", (unsigned long long)RV.id); }
         RV.id = 0; RV.state = ROOM_NONE; RV.nMembers = 0; RV.nChat = 0; g_nLast = 0;
+        g_nKicked = 0;   // build 113: a new room starts with nobody kicked
         if (g_callKind == 1 || g_callKind == 3) g_call = 0, g_callKind = 0;
     }
     if (!g_call && RQ.create) {
@@ -702,6 +734,26 @@ void RoomTick(int build) {
             if (strcmp(RQ.dk[i], "sc") && strcmp(RQ.dk[i], "su")) Log("room: my %s = %s", RQ.dk[i], RQ.dv[i]);
         }
         RQ.nData = 0;
+        // build 113: kicks (host only)
+        if (RV.owner == g_me) {
+            if (g_kickReq) {
+                bool known = false;
+                for (int i = 0; i < g_nKicked; i++) known |= g_kicked[i] == g_kickReq;
+                if (!known && g_nKicked < 16) g_kicked[g_nKicked++] = g_kickReq;
+                g_kickSentAt = 0;
+                Log("room: removing %s from the room", SteamFriendName(g_kickReq));
+            }
+            if (GetTickCount() - g_kickSentAt > 2000)
+                for (int i = 0; i < g_nKicked; i++)
+                    for (int j = 0; j < RV.nMembers; j++)
+                        if (RV.members[j].id == g_kicked[i]) {
+                            char msg[48];
+                            snprintf(msg, sizeof msg, "\x01KICK:%llu", (unsigned long long)g_kicked[i]);
+                            pSendLobbyChatMsg(g_mm, RV.id, msg, (int)strlen(msg) + 1);
+                            g_kickSentAt = GetTickCount();
+                        }
+        }
+        g_kickReq = 0;
         if (RQ.changeReq && RV.owner == g_me) {
             RoomSettings s = RQ.change;
             snprintf(s.name, sizeof s.name, "%s", RV.set.name);
@@ -793,5 +845,6 @@ void RoomSetReady(bool on) { RQLOCK QueueData("rdy", on ? "1" : "0"); RV.myReady
 void RoomSetMyData(const char* key, const char* val) { RQLOCK QueueData(key, val); }
 void RoomStandIn(bool on) { RQLOCK g_standIn = on; }
 void RoomSystemLine(const char* text) { RQLOCK ChatAdd(g_me, "", text, true); }
+void RoomKick(uint64_t member) { RQLOCK if (member && member != g_me && member != ROOM_STANDIN_ID) g_kickReq = member; }
 #undef RQLOCK
 } // namespace net

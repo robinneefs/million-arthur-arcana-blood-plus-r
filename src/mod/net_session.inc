@@ -152,7 +152,7 @@ static uint64_t g_netPick = 0;          // friend picked with F5
 static char g_netPickName[64] = "";
 // Build 112: a match from a room table (roommatch.inc): who and which side come from the
 // seats, not from rollback.ini; the one-PC test player means the loopback test.
-static struct RoomMatchCfg { bool on = false, loop = false; uint64_t peer = 0; int side = 0; } g_roomCfg;
+static struct RoomMatchCfg { bool on = false, loop = false; uint64_t peer = 0; int side = 0; int setLen = 0; } g_roomCfg;   // setLen: build 113, 0 = no limit
 enum RmState : int { RM_IDLE = 0, RM_STARTING, RM_PLAYING };
 static struct RoomMatchView {             // read by the room screen (roomui.inc)
     std::atomic<int> st{RM_IDLE};
