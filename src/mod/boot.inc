@@ -306,6 +306,7 @@ static void Request(const MatchSettings& ms) {
 
 // Build 107: a fight starts (from the loading screen, or again in place after a rematch)
 static void FightStarts() {
+    HudResetMatch();                     // build 109: stutters count per match
     postFight = false;
     answerNo = false;
     rmPending = false;

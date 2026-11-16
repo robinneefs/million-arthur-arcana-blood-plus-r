@@ -3692,6 +3692,39 @@ static uint32_t g_inLastMap[2] = {0xFFFFFFFFu, 0xFFFFFFFFu};
 enum class NetAct { Free, Stall, Inject };
 static bool g_netInject = false;     // this input step uses the network inputs
 static bool g_netStall = false;      // this frame waits (no input step, no update)
+// Build 109: numbers for the in-fight info bar (game thread writes, drawing thread reads)
+static struct HudStats {
+    std::atomic<uint32_t> stutters{0};     // pauses for the other player in this match
+    uint32_t ring[8] = {};                 // when the last 8 started (GetTickCount)
+    std::atomic<uint32_t> ringN{0};
+    uint32_t lastStallTick = 0xFFFFFFF0u;
+    std::atomic<uint32_t> rbCur{0}, rbPrev{0}, rbStart{0};
+} g_hud;
+static void HudStall() {                  // a frame that waits for the other player
+    if (g_tick - g_hud.lastStallTick > 2) {
+        g_hud.stutters++;
+        g_hud.ring[g_hud.ringN.load() % 8] = GetTickCount();
+        g_hud.ringN++;
+    }
+    g_hud.lastStallTick = g_tick;
+}
+static void HudRollback(uint32_t depth) {
+    uint32_t now = GetTickCount();
+    if (now - g_hud.rbStart.load() >= 1000) { g_hud.rbPrev = g_hud.rbCur.load(); g_hud.rbCur = 0; g_hud.rbStart = now; }
+    if (depth > g_hud.rbCur.load()) g_hud.rbCur = depth;
+}
+static uint32_t HudRollbackShown() {     // biggest rollback in about the last second
+    uint32_t age = GetTickCount() - g_hud.rbStart.load();
+    if (age >= 2000) return 0;
+    if (age >= 1000) return g_hud.rbCur.load();
+    return g_hud.rbCur.load() > g_hud.rbPrev.load() ? g_hud.rbCur.load() : g_hud.rbPrev.load();
+}
+static int HudRecentStutters(uint32_t ms) {
+    uint32_t n = g_hud.ringN.load(), now = GetTickCount(), c = 0;
+    for (uint32_t i = 0; i < 8 && i < n; i++) if (now - g_hud.ring[(n - 1 - i) % 8] < ms) c++;
+    return (int)c;
+}
+static void HudResetMatch() { g_hud.stutters = 0; g_hud.ringN = 0; g_hud.rbCur = g_hud.rbPrev = 0; }
 static NetAct NetBeforeInput();
 static void NetFill(uint32_t T);
 static void BootInputOverride(uint32_t T, uint32_t in[2][2]);
@@ -3844,6 +3877,7 @@ static void __cdecl H_Input() {
     NetAct na = NetBeforeInput();
     if (na == NetAct::Stall) {   // online: the other player's input for this frame isn't here yet
         g_netStall = true;
+        HudStall();                  // build 109
         NetAfterInput(false);
         return;
     }
@@ -4713,6 +4747,7 @@ static uint32_t RbRollback(void* scene, uint32_t w, uint32_t F) {
     if (g_rbRollbacks <= 40) Log("  rollback at frame %u: back to frame %u (%u frames re-run)", F, w, depth);
     if (depth > g_rbMaxDepth) g_rbMaxDepth = depth;
     if (depth <= 8) g_rbDepthHist[depth]++;
+    HudRollback(depth);              // build 109
     g_tRb.Add(NowMs() - t);
     return r;
 }
@@ -4881,6 +4916,7 @@ static uint32_t RollbackFrame(void* scene) {
         g_pend.valid = false;
         g_frame--;
         g_rbStalls++;
+        HudStall();                  // build 109
         SetStatus("ROLLBACK TEST | waiting for input");
         return 0;
     }
