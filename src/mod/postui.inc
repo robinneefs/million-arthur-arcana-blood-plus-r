@@ -218,17 +218,18 @@ static void PmFrame() {
             if (pc == 'A') act = true;
             if (pc == 'B' || io.MouseClicked[1]) back = true;
         }
-        if (move && !v.setLen) PM.sel = (PM.sel + 1) % 2;
+        if (move && !v.setLen) { PM.sel = (PM.sel + 1) % 2; MM_SND |= 1; }
         if (io.MousePos.x > -FLT_MAX / 2)
             for (int i = 0; i < 2; i++)
                 if ((!v.setLen || i == 1) && ImGui::IsMouseHoveringRect(CP(PM_XS[i] - 60, PM_Y - 16), CP(PM_XS[i] + PM_WS[i] + 20, PM_Y + 72), false)) {
-                    if (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) PM.sel = i;
+                    if ((io.MouseDelta.x != 0 || io.MouseDelta.y != 0) && PM.sel != i) { PM.sel = i; MM_SND |= 1; }   // build 118: sounds
                     if (io.MouseClicked[0]) { PM.sel = i; act = true; }
                 }
         if (now - PM.openT < 0.5) act = back = false;   // the screen has to be there first
         if (act) {
             uint8_t c = PM.sel == 0 ? LCH_REMATCH : LCH_LOBBY;
             if (me.choice != c || me.choiceMatch != LB.postMatch) {
+                MM_SND |= 2;
                 me.choice = c;
                 me.choiceMatch = LB.postMatch;
                 LbChanged();
@@ -236,6 +237,7 @@ static void PmFrame() {
             }
         } else if (back && me.choice != LCH_NONE && me.choiceMatch == LB.postMatch) {
             me.choice = LCH_NONE;
+            MM_SND |= 4;
             LbChanged();
             Log("ui: after-match screen: choice taken back");
         }
