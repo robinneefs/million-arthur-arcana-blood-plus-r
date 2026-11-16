@@ -21,12 +21,19 @@ static const wchar_t* kExeName = L"Million Arthur.exe";
 static const wchar_t* kDllName = L"arcana_rollback.dll";
 static const wchar_t* kAppId = L"989550";
 
+// Build 117: no console window. What the launcher has to say goes to launcher_log.txt next to
+// it; when something goes wrong the last lines are shown in a message box.
+static std::wstring g_said;
+static FILE* g_log = nullptr;
 static void Say(const wchar_t* fmt, ...) {
+    wchar_t line[1024];
     va_list ap; va_start(ap, fmt);
-    vfwprintf(stdout, fmt, ap);
+    _vsnwprintf(line, 1023, fmt, ap);
     va_end(ap);
-    fputwc(L'\n', stdout);
-    fflush(stdout);
+    line[1023] = 0;
+    g_said += line;
+    g_said += L"\n";
+    if (g_log) { fwprintf(g_log, L"%ls\n", line); fflush(g_log); }
 }
 
 static bool FileExists(const std::wstring& p) {
@@ -152,13 +159,24 @@ static bool InjectPid(DWORD pid, const std::wstring& dll) {
 #include "update.inc"
 
 static int Finish(int code) {
-    Say(L"\nPress Enter to close this window.");
-    getchar();
+    if (code) {
+        std::wstring t = g_said;
+        if (t.size() > 1500) t = L"..." + t.substr(t.size() - 1500);
+        MessageBoxW(nullptr, t.c_str(), L"Arcana Blood +R", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    }
+    if (g_log) fclose(g_log);
     return code;
 }
 
 int wmain(int argc, wchar_t** argv) {
-    Say(L"Arcana Blood +R launcher  %hs BETA (build %d)\n", MOD_VERSION_NUM, MOD_BUILD);
+    {
+        wchar_t self0[MAX_PATH];
+        GetModuleFileNameW(nullptr, self0, MAX_PATH);
+        std::wstring lp(self0);
+        lp = lp.substr(0, lp.find_last_of(L'\\') + 1) + L"launcher_log.txt";
+        g_log = _wfopen(lp.c_str(), L"w, ccs=UTF-8");
+    }
+    Say(L"Arcana Blood +R launcher  %hs BETA (build %d)", MOD_VERSION_NUM, MOD_BUILD);
     bool attach = false;
     std::wstring exe;
     for (int i = 1; i < argc; i++) {
@@ -184,7 +202,7 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (DWORD running = FindGamePid(0)) {
-        Say(L"The game is already running. Close it first, or use --attach.");
+        Say(L"The game is already running. Close it first, then start the launcher again.");
         (void)running;
         return Finish(1);
     }
@@ -221,9 +239,6 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     if (!ok) { Say(L"Could not load the mod into the game."); return Finish(1); }
-    Say(L"Mod loaded. Have fun!");
-    Say(L"This window closes by itself in a few seconds.");
-    Say(L"If something goes wrong: Help > Pack logs in the mod's main menu.");
-    Sleep(6000);
-    return 0;
+    Say(L"Mod loaded.");
+    return Finish(0);
 }

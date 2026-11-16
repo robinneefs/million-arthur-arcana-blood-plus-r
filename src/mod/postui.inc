@@ -213,10 +213,15 @@ static void PmFrame() {
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_RightArrow]) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_DownArrow])) move = 1;
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Enter]) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Space])) act = true;
         if (ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Escape]) || ImGui::IsKeyPressed(io.KeyMap[ImGuiKey_Backspace])) back = true;
+        {   // build 117: clicking the A / B prompts at the bottom, right click = B
+            char pc = MmTakePadClick();
+            if (pc == 'A') act = true;
+            if (pc == 'B' || io.MouseClicked[1]) back = true;
+        }
         if (move && !v.setLen) PM.sel = (PM.sel + 1) % 2;
         if (io.MousePos.x > -FLT_MAX / 2)
             for (int i = 0; i < 2; i++)
-                if ((!v.setLen || i == 1) && ImGui::IsMouseHoveringRect(CP(PM_XS[i] - 60, PM_Y - 16), CP(PM_XS[i] + PM_WS[i] + 20, PM_Y + 72))) {
+                if ((!v.setLen || i == 1) && ImGui::IsMouseHoveringRect(CP(PM_XS[i] - 60, PM_Y - 16), CP(PM_XS[i] + PM_WS[i] + 20, PM_Y + 72), false)) {
                     if (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) PM.sel = i;
                     if (io.MouseClicked[0]) { PM.sel = i; act = true; }
                 }

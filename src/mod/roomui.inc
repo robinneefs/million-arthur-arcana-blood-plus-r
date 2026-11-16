@@ -32,6 +32,11 @@ static MmNav MmReadNav(bool typing) {
         if (ImGui::IsKeyPressed('Y')) n.y = true;
         if (ImGui::IsKeyPressed(0x21)) n.lb = true;   // Page Up
         if (ImGui::IsKeyPressed(0x22)) n.rb = true;   // Page Down
+        // build 117: clicking a button prompt = that button; right click = B (not in a room:
+        // there right click changes a room setting, and B would stand you up)
+        char pc = MmTakePadClick();
+        if (pc == 'A') n.a = true; else if (pc == 'B') n.b = true; else if (pc == 'X') n.x = true; else if (pc == 'Y') n.y = true;
+        if (io.MouseClicked[1] && MM.screen != 1) n.b = true;
     }
 #ifndef UI_HARNESS
     uint32_t nb = U.capture.load() ? U.navBits : 0, fresh = nb & ~MM.prevNav;

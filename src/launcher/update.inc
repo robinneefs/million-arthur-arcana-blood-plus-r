@@ -298,14 +298,14 @@ static bool CheckAndUpdate(const std::wstring& dir, int argc, wchar_t** argv) {
     std::wstring msg = L"A new version of Arcana Blood +R is available.\n\nYou have:  " + W(MOD_VERSION) + L"\nNew:  " + W(ver) +
                        (notes.empty() ? L"" : L"\n\nWhat's new:\n" + W(notes)) +
                        L"\n\nInstall it now? Your settings and My setup are kept.\n(Yes = update now, No = not now, start the game as it is.)";
-    if (MessageBoxW(GetConsoleWindow(), msg.c_str(), L"Arcana Blood +R - update", MB_YESNO | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND) != IDYES) {
+    if (MessageBoxW(nullptr, msg.c_str(), L"Arcana Blood +R - update", MB_YESNO | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND) != IDYES) {
         Say(L"  Not now. Starting the game as it is.");
         return false;
     }
 
     auto fail = [&](const wchar_t* why) {
         Say(L"  Update failed: %ls", why);
-        MessageBoxW(GetConsoleWindow(), (std::wstring(L"The update did not work:\n") + why + L"\n\nNothing was changed. The game starts with the version you have.").c_str(),
+        MessageBoxW(nullptr, (std::wstring(L"The update did not work:\n") + why + L"\n\nNothing was changed. The game starts with the version you have.").c_str(),
                     L"Arcana Blood +R - update", MB_OK | MB_ICONWARNING | MB_TOPMOST);
         return false;
     };
@@ -372,8 +372,9 @@ static bool CheckAndUpdate(const std::wstring& dir, int argc, wchar_t** argv) {
     for (int i = 1; i < argc; i++) cmd += std::wstring(L" \"") + argv[i] + L"\"";
     STARTUPINFOW si{sizeof si};
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(self.c_str(), &cmd[0], nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, dir.c_str(), &si, &pi)) {
-        Say(L"  Could not start the new launcher. Start arcana_launcher.exe again.");
+    if (!CreateProcessW(self.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
+        Say(L"  Could not start the new launcher.");
+        MessageBoxW(nullptr, L"The update is installed, but the new launcher did not start. Start arcana_launcher.exe again.", L"Arcana Blood +R - update", MB_OK | MB_ICONINFORMATION);
         return false;
     }
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
