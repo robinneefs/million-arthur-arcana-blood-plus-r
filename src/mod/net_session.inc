@@ -140,6 +140,11 @@ static struct NetS {
     // stats
     uint32_t stalls = 0, timeStalls = 0, sent = 0, recvd = 0, desyncs = 0, fpOk = 0, fpFalse = 0, srandIgnored = 0;
     uint32_t badPackets = 0, otherPath = 0;
+    // build 114: values that already differ at a fight's first check (frame 1, before anyone
+    // pressed anything) are left over from loading on each PC, not from play. They stay the
+    // same all fight, so they are left out of the check for the rest of that fight.
+    uint32_t fpIgn[(FP_SIZE / 4 + 31) / 32] = {};
+    uint32_t fpNoise = 0;
     uint32_t waited = 0, waitMs = 0, lastStallFrame = 0, seenDesyncs = 0;
     // build 111: switched away from a full-screen game (the game stops while it has no screen)
     volatile uint32_t peerAwaySince = 0;   // the other player's "I'm away" pings started (0 = not away)
@@ -503,6 +508,7 @@ static void NetFpCapture(uint32_t k) {
     L.final = L.compared = false;
     L.raw.resize(FP_SIZE);
     memcpy(L.raw.data(), (const void*)FP_BASE, FP_SIZE);
+    if (k == 1) { memset(N.fpIgn, 0, sizeof N.fpIgn); N.fpNoise = 0; }   // a new fight
     for (uint32_t b = 0; b < FP_NBLK; b++) {
         uint32_t lo = b * FP_BLK, hi = lo + FP_BLK > FP_SIZE ? FP_SIZE : lo + FP_BLK;
         uint32_t h = 0x811C9DC5u ^ b;
@@ -511,6 +517,7 @@ static void NetFpCapture(uint32_t k) {
             uint32_t v;
             memcpy(&v, &L.raw[o], 4);
             if (LooksLikePtr(v)) { L.mask[b][i / 32] |= 1u << (i % 32); v = 0x9A11E7u; }
+            else if ((N.fpIgn[(o / 4) / 32] >> ((o / 4) % 32)) & 1) v = 0x1D1E5u;
             h = (h ^ v) * 0x01000193u;
         }
         L.hash[b] = h;
@@ -549,7 +556,7 @@ static void FpCompare(FpLocal& L) {
     uint32_t bad = 0;
     for (uint32_t b = 0; b < FP_NBLK; b++) {
         if (L.hash[b] == R.hash[b]) continue;
-        if (bad < 6) SendRaw(L, b);
+        if (bad < (L.frame == 1 ? FP_NBLK : 6)) SendRaw(L, b);
         bad++;
     }
     if (!bad) { if (!seedBad) N.fpOk++; }
@@ -566,15 +573,22 @@ static void NetHandleRaw(const NRaw* m, int n) {
     for (uint32_t o = lo, i = 0; o + 4 <= hi; o += 4, i++) {
         uint32_t bit = 1u << (i % 32);
         if ((L.mask[m->blk][i / 32] | m->mask[i / 32]) & bit) continue;
+        uint32_t w = o / 4;
+        if ((N.fpIgn[w / 32] >> (w % 32)) & 1) continue;
         uint32_t a, b;
         memcpy(&a, &L.raw[o], 4);
         memcpy(&b, &m->data[o - lo], 4);
         if (a == b) continue;
+        if (m->frame == 1) { N.fpIgn[w / 32] |= 1u << (w % 32); N.fpNoise++; diffs++; continue; }
         if (diffs < 4 && N.desyncs < 10) {
             size_t len = strlen(detail);
             snprintf(detail + len, sizeof detail - len, " P%u+0x%X: %08X vs %08X;", o / 0xA520 + 1, o % 0xA520, a, b);
         }
         diffs++;
+    }
+    if (diffs && m->frame == 1) {   // left over from loading: not a desync (see fpIgn)
+        Log("net:   frame 1 block %u: %u values differ from the start (left over from loading on each PC, not from play); left out for this fight", m->blk, diffs);
+        return;
     }
     if (!diffs) {
         N.fpFalse++;
@@ -1481,7 +1495,29 @@ static uint32_t HeldMask(uint32_t pad);
 // Called from the keyboard-read hook in the first run of frame T's input step.
 static int BootZeroInput();    // boot.inc (build 107)
 static std::atomic<uint32_t> g_postNav{0};   // build 107: this PC's controller on the after-match screen
+// Build 114 (friend test 113: the friend's controller did nothing in his first fight; the
+// session had taken the game's "player 1 controller", slot 0, while his pad was slot 4): with
+// the controller on Automatic, a button pressed on another controller while this one has been
+// quiet for half a second makes that one this player's controller.
+static bool g_padFollow = true;
+static uint32_t g_padQuiet = 0, g_padPrev[8];
+static void NetPadFollow() {
+    uint32_t d = N.localDev;
+    bool quiet = d >= addr::PAD_COUNT || (PadU32(d, addr::PAD_RAW0) == 0 && PadU32(d, addr::PAD_RAW1) == 0);
+    g_padQuiet = quiet ? g_padQuiet + 1 : 0;
+    for (uint32_t i = 0; i < 8; i++) {
+        uint32_t r = PadU32(i, addr::PAD_RAW0), fresh = r & ~g_padPrev[i] & ~0xFu;   // buttons, not directions
+        g_padPrev[i] = r;
+        if (g_padFollow && i != d && fresh && g_padQuiet >= 30) {
+            Log("input: controller slot %u was quiet and slot %u pressed a button: this player now uses slot %u", d, i, i);
+            N.localDev = i;
+            g_padQuiet = 0;
+            return;
+        }
+    }
+}
 static void NetFill(uint32_t T) {
+    NetPadFollow();
     uint32_t d = N.localDev;
     uint32_t raw0 = d < addr::PAD_COUNT ? PadU32(d, addr::PAD_RAW0) : 0;
     uint32_t raw1 = d < addr::PAD_COUNT ? PadU32(d, addr::PAD_RAW1) : 0;

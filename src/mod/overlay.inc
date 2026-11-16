@@ -125,9 +125,13 @@ static void UiSaveController() {
 }
 
 // Called by NetBecomeOn (game thread) when a session starts.
+static int g_lastMenuPad = -1;   // build 114: the controller that last pressed a button in our menus
 static void UiSessionStarted() {
-    if (U.controller >= 0) N.localDev = (uint32_t)U.controller;
-    Log("ui: connected; this PC's player uses controller slot %u (%s)", N.localDev, U.controller >= 0 ? "picked in the overlay" : "the game's player 1 controller");
+    g_padFollow = U.controller < 0;
+    const char* how = "the game's player 1 controller";
+    if (U.controller >= 0) { N.localDev = (uint32_t)U.controller; how = "picked in the overlay"; }
+    else if (g_lastMenuPad >= 0) { N.localDev = (uint32_t)g_lastMenuPad; how = "the one used in the menus"; }
+    Log("ui: connected; this PC's player uses controller slot %u (%s)", N.localDev, how);
     U.screen = US_SESSION;
 }
 
@@ -334,6 +338,8 @@ static void UiAfterGameInput() {
         U.padRaw[i] = r;
         any |= r;
         if (i < 8) nav |= r;                  // keyboard (8, 9) drives the overlay through window messages instead
+        static uint32_t prev[8];
+        if (i < 8) { if (r & ~prev[i]) g_lastMenuPad = (int)i; prev[i] = r; }   // build 114
     }
     U.navBits = nav;
     if (U.detect) {
