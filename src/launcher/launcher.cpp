@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include "../mod/version.h"
 
 static const wchar_t* kExeName = L"Million Arthur.exe";
 static const wchar_t* kDllName = L"arcana_rollback.dll";
@@ -154,7 +155,7 @@ static int Finish(int code) {
 }
 
 int wmain(int argc, wchar_t** argv) {
-    Say(L"Arcana Blood rollback launcher (step 2 test build)\n");
+    Say(L"Arcana Blood +R launcher  %hs BETA (build %d)\n", MOD_VERSION_NUM, MOD_BUILD);
     bool attach = false;
     std::wstring exe;
     for (int i = 1; i < argc; i++) {

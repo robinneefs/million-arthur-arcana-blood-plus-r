@@ -13,7 +13,7 @@
 //              then check memory is byte-for-byte identical. Needs a profile
 //              from the same game session.
 //        F11 = Change rewind depth N (1, 2, 4, 8).
-//   Status is shown in the game window title. Details go to rollback_log.txt.
+//   The window title gets " +R". Details go to rollback_log.txt.
 //
 // Changes in build 2 (after the first test):
 //   - The game reads the real clock once per frame. During a replay we now
@@ -55,6 +55,8 @@
 // Nothing is written into the game folder. All files sit next to this DLL.
 
 #include <windows.h>
+#include <shlobj.h>
+#include <shellapi.h>
 #include <tlhelp32.h>
 #include <cstdint>
 #include <cstdio>
@@ -66,6 +68,7 @@
 #include <new>
 #include <unordered_map>
 #include <unordered_set>
+#include <string>
 #include "addr.h"
 #include "util.h"
 #include "transport.h"
@@ -130,6 +133,7 @@ struct Settings {
     uint32_t hwWatch[3] = {}; // build 84: addresses for the CPU write watch (ini hw_watch)
     int bigWatch = 1;            // build 82: watch writes into left-out big blocks
     int memList = 1;             // build 81: rollback_memlist.txt: use it at fight start, add what the memory watch finds
+    int devTools = 0;            // build 106: [dev] tools=1 turns on the test keys F4-F11 (off for players)
 };
 static Settings g_cfg;
 static void HwReport(const char* why);   // build 85
@@ -137,6 +141,7 @@ static void HwReport(const char* why);   // build 85
 static void LoadSettings() {
     wchar_t ini[MAX_PATH];
     _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
+    g_cfg.devTools         = GetPrivateProfileIntW(L"dev", L"tools", 0, ini);
     g_cfg.profileFrames    = GetPrivateProfileIntW(L"rollback", L"profile_frames", 600, ini);
     g_cfg.depth            = GetPrivateProfileIntW(L"rollback", L"depth", 1, ini);
     g_cfg.includeContested = GetPrivateProfileIntW(L"rollback", L"include_contested", 1, ini);
@@ -1111,7 +1116,9 @@ static HRESULT WINAPI H_CueDestroy(void* cue) {
 typedef HRESULT(WINAPI* SbPlay_t)(void*, DWORD, DWORD, LONG, void**);
 static SbPlay_t o_SbPrepare, o_SbPlay;
 static uint32_t g_sbVt = 0, g_sbReplayed = 0, g_sbMiss = 0, g_sbRecorded = 0;
+namespace snd { static void LogGamePlay(uint32_t cue); }   // build 92 (sound.inc)
 static HRESULT SbCommon(SbPlay_t real, void* sb, DWORD idx, DWORD fl, LONG off, void** pp) {
+    snd::LogGamePlay(idx & 0xFFFF);
     if (t_inXact) return real(sb, idx, fl, off, pp);
     if (Watching() && g_jcur && g_jmode != JMode::Off) {
         uint32_t key = idx & 0xFFFF;
@@ -5018,8 +5025,10 @@ static void AutoTestTick() {
     }
 }
 
+#include "version.h"
 #include "net_session.inc"
 #include "lobby.inc"
+#include "gameart.inc"
 #include "overlay.inc"
 #include "boot.inc"
 
@@ -5030,7 +5039,7 @@ static void PollHotkeys() {
     bool f7 = KeyPressed(VK_F7), f6 = KeyPressed(VK_F6);
     bool f4 = KeyPressed(VK_F4), f5 = KeyPressed(VK_F5);
     UiGameThreadTick(focused);
-    if (!focused) return;
+    if (!focused || !g_cfg.devTools) return;   // build 106: test keys only with [dev] tools=1
     if (f4) {
         if (N.st != NS_OFF) NetEnd("F4 pressed");
         else if (g_mode != Mode::Idle || g_auto) SetStatus("stop the test first (F7 / F8), then F4 to connect");
@@ -5154,6 +5163,7 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
 // some frames, e.g. while loading); noted for the screen check log.
 static uint32_t __attribute__((thiscall)) H_ChildUpdate(void* child) {
     g_childRan = child && !reinterpret_cast<uint8_t*>(child)[4];
+    if (boot::HoldsTitle(child)) { g_childRan = false; return 0; }   // build 101: our main menu is up
     // Build 52: online, on a synced screen, the game's first call of the
     // screen's update after loading is held back and only marks this PC ready
     // (see NetBeforeInput). The screen's real first update is then frame 1,
@@ -5359,23 +5369,22 @@ static DWORD WINAPI BootSampleThread(LPVOID) {
     return 0;
 }
 
+// Build 106: the window title is the game's own title + " +R" (no status text any more;
+// the status still goes to the log and the overlay). Set again if the game changes it.
 static DWORD WINAPI TitleThread(LPVOID) {
-    char last[512] = "";
     for (;;) {
-        Sleep(250);
+        Sleep(500);
         HWND hwnd = *reinterpret_cast<HWND*>(addr::G_HWND);
         if (!hwnd || !IsWindow(hwnd)) continue;
-        if (!g_origTitle[0]) GetWindowTextW(hwnd, g_origTitle, 256);
-        char now[512];
-        EnterCriticalSection(&g_statusLock);
-        if (g_netStatus[0]) snprintf(now, sizeof now, "%s] [%s", g_netStatus, g_status);
-        else snprintf(now, sizeof now, "%s", g_status);
-        LeaveCriticalSection(&g_statusLock);
-        if (strcmp(now, last) == 0) continue;
-        strcpy(last, now);
-        wchar_t title[768];
-        _snwprintf(title, 768, L"%ls  [%hs]", g_origTitle, now);
-        SendMessageTimeoutW(hwnd, WM_SETTEXT, 0, (LPARAM)title, SMTO_ABORTIFHUNG, 200, nullptr);
+        if (!g_origTitle[0]) {
+            GetWindowTextW(hwnd, g_origTitle, 256);
+            if (!g_origTitle[0]) continue;
+        }
+        wchar_t want[300], cur[300] = L"";
+        _snwprintf(want, 300, L"%ls +R", g_origTitle);
+        GetWindowTextW(hwnd, cur, 300);
+        if (wcscmp(cur, want) == 0) continue;
+        SendMessageTimeoutW(hwnd, WM_SETTEXT, 0, (LPARAM)want, SMTO_ABORTIFHUNG, 200, nullptr);
     }
 }
 

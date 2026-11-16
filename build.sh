@@ -14,8 +14,9 @@ for f in imgui imgui_draw imgui_widgets imgui_tables backends/imgui_impl_dx9 bac
   [ -f $o ] && [ $o -nt third_party/imgui/$f.cpp ] || $CXX $FLAGS $IMGUI -c third_party/imgui/$f.cpp -o $o
 done
 $CXX $FLAGS $IMGUI -Wall -Wno-attributes -shared -o build/arcana_rollback.dll \
-  src/mod/mod.cpp src/mod/util.cpp src/mod/transport.cpp build/obj/*.o -lws2_32 -ldwmapi -lgdi32
+  src/mod/mod.cpp src/mod/util.cpp src/mod/transport.cpp build/obj/*.o -lws2_32 -ldwmapi -lgdi32 -lole32 -lshell32
 $CXX $FLAGS -Wall -municode -o build/arcana_launcher.exe src/launcher/launcher.cpp
 i686-w64-mingw32-strip build/arcana_rollback.dll build/arcana_launcher.exe
-cp config/rollback.ini build/
+cp config/rollback.ini assets/rollback_logo.png build/
+mkdir -p build/fonts && cp fonts/* build/fonts/
 ls -la build
