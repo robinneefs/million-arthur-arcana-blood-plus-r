@@ -178,6 +178,9 @@ static std::atomic<bool> g_dcFreeze{false}, g_dcExit{false}, g_dcSound{false};
 static std::atomic<uint32_t> g_dcWaitMs{0}, g_dcAwayMs{0};   // in step with the other game: ms since its last packet
 static bool g_uiBlock = false;                 // drawing thread: menus get no input under the pop-up
 static bool BootInMatch();
+static bool RoomMatchQuietEnd();   // build 112 (roommatch.inc)
+static bool RoomMatchOn();
+static void RoomMatchTick(uint32_t vt);
 namespace snd { static void PlayAlert(); }
 static void DcOnEnd(const char* why) {
     static const struct { const char* s; uint8_t c; } kMap[] = {
@@ -189,6 +192,7 @@ static void DcOnEnd(const char* why) {
     int c = -1;
     for (auto& m : kMap) if (!strcmp(m.s, why)) c = m.c;
     if (c < 0) return;                                  // we ended it ourselves
+    if (RoomMatchQuietEnd()) { Log("ui: room match ended before / after the fight (%s): no pop-up", why); return; }   // build 112
     if (N.st != NS_ON && c != 3) return;                // never got connected
     char nm[32] = "";
     EnterCriticalSection(&g_lobbyLock);
@@ -247,14 +251,15 @@ static void UiGameThreadTick(bool focused) {
             PgSetOpen(false); toggle = false;
         }
         else if (!PgIsOpen() && wantMm && can) { PgSetOpen(true); mmShut = false; }
-        else if (!PgIsOpen() && can && !NetOn() && !mmShut && vt == VT_TITLE) {
+        else if (!PgIsOpen() && can && (!NetOn() || RoomMatchOn()) && !mmShut && vt == VT_TITLE) {   // build 112: also right after a room match
             PgSetOpen(true);
             if (!U.visible) U.visible = true;
             U.autoOpened = true;
             Log("ui: main menu opened on the game's title screen (pictures so far %u)", g_presents);
         }
         // the game's title screen stays on hold while our main menu covers it (boot.inc)
-        g_holdTitle = PgIsOpen() && U.visible.load();
+        // (build 112: not while a match boots from the title screen: the game's own path runs as it did before build 101)
+        g_holdTitle = PgIsOpen() && U.visible.load() && !BootInMatch();
     }
     // build 92: our main menu plays its own music and sounds through the game's sound engine
     // (and logs the sounds the game plays outside fights)
@@ -265,6 +270,7 @@ static void UiGameThreadTick(bool focused) {
         snd::Tick(PgIsOpen());
         if (g_dcSound.exchange(false)) snd::PlayAlert();   // build 108
         net::RoomTick((int)NET_BUILD);   // build 100: Steam rooms (lobbies)
+        RoomMatchTick(vt);               // build 112: matches from the room's tables
     }
     if (toggle) {
         bool v = !U.visible.load();
@@ -1009,6 +1015,7 @@ static void UiStatusBar(const ImVec2& disp) {
 #include "postui.inc"   // build 107: after-match screen
 #include "dcui.inc"     // build 108: connection lost pop-up + waiting banner
 #include "hudui.inc"    // build 109: info bar + player names in fights
+#include "roommatch.inc" // build 112: matches from the room's tables
 #ifndef UI_HARNESS
 #include "sound.inc"
 #endif

@@ -381,7 +381,7 @@ static void MmFrame() {
     // build 101: while you are in a room (or getting into one, e.g. from a Steam invite),
     // the room screen is the only screen; leaving the room brings the main menu back
     bool roomBusy = g_rv.state == net::ROOM_IN || g_rv.state == net::ROOM_CREATING || g_rv.state == net::ROOM_JOINING;
-    if (roomBusy && MM.screen != 1) { MM.screen = 1; MM.roomT = -1; }
+    if (roomBusy && MM.screen != 1 && MM.screen != 4) { MM.screen = 1; MM.roomT = -1; }   // build 112: My setup can be edited from the room
     // a screen that hands over to another one mid-frame draws nothing itself: draw the
     // next one in the same frame, so the game's picture never shows through (build 100 flash)
     for (int k = 0; k < 3; k++) {

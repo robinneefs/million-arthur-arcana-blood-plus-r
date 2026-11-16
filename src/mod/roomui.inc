@@ -441,13 +441,42 @@ static void MmSearchFrame() {
 }
 
 // ============================ the room (screen 1) ============================
+static void SuOpen();                                   // setupui.inc
+static int SuPortraitOf(int chara);
+static void SuRoomPanel(ImDrawList* dl, float x0, float y0, float x1, float y1, float in);
+#ifndef UI_HARNESS
+static int RmViewState() { return RMV.st.load(); }    // build 112 (roommatch.inc)
+static uint32_t RmViewT0() { return RMV.t0.load(); }
+static bool RmViewConnected() { return RMV.connected.load(); }
+static uint32_t RmNowMs() { return GetTickCount(); }
+#else
+static int g_hRm = 0;
+static int RmViewState() { return g_hRm; }
+static uint32_t RmViewT0() { return 0; }
+static bool RmViewConnected() { return false; }
+static uint32_t RmNowMs() { return 1200; }
+#endif
+static int g_seatSel = 0;
+static const net::RoomMember* MmSeatOwner(const net::RoomView& R, int seat) {
+    for (int i = 0; i < R.nMembers; i++) if (R.members[i].seat == seat) return &R.members[i];
+    return nullptr;
+}
+// build 112: A on a seat: sit down (or move), or READY / not ready on your own seat
+static void MmSeatPress(const net::RoomView& R, int seat) {
+    if (RmViewState() == 2) { MmNote("Your match is still finishing"); return; }
+    const net::RoomMember* o = MmSeatOwner(R, seat);
+    if (seat == R.mySeat) { net::RoomSetReady(!R.myReady); MM_SND |= R.myReady ? 4 : 2; return; }
+    if (o) { MmNote(o->playing ? "That table is playing a match" : "That seat is taken"); MM_SND |= 4; return; }
+    net::RoomSit(seat);
+    MM_SND |= 2;
+}
 static char g_chatIn[200] = "";
 static bool g_chatFocus = false;
 static bool g_invOpen = false;
 static int g_invSel = 0;
 static void MmRoomFrame() {
     const MmPal& P = MmP();
-    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_invOpen = false; }
+    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_invOpen = false; g_seatSel = g_rv.mySeat >= 0 ? g_rv.mySeat : 0; }
     MmT T = MmTimes(MM.roomT);
     ImGuiIO& io = ImGui::GetIO();
     bool typing = io.WantTextInput;
@@ -485,6 +514,20 @@ static void MmRoomFrame() {
         else nav = MmNav();
     }
     if (nav.x && !typing) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
+    // build 112: the seat cursor (columns: A1P A2P B1P B2P, rows: A/B over C/D)
+    int nTables = ImClamp(R.set.size / 2, 1, 4), nSeats = nTables * 2;
+    if (g_seatSel >= nSeats) g_seatSel = 0;
+    if (!typing && (nav.dx || nav.dy)) {
+        int t = g_seatSel / 2, col = (t % 2) * 2 + (g_seatSel & 1), row = t / 2;
+        col += nav.dx; row += nav.dy;
+        if (col >= 0 && col < 4 && row >= 0 && row < 2) {
+            int s2 = (row * 2 + col / 2) * 2 + (col & 1);
+            if (s2 < nSeats) { g_seatSel = s2; MM_SND |= 1; }
+        }
+    }
+    if (nav.a && !typing) MmSeatPress(R, g_seatSel);
+    bool seated = R.mySeat >= 0;
+    if (nav.y && !typing) { MM_SND |= 2; SuOpen(); return; }
     // B / Esc: build 101: you can't go to the main menu while you are in a room; holding B 1 s
     // leaves the room (then the main menu). A short press only says so.
     static double bStart = -1;
@@ -497,7 +540,11 @@ static void MmRoomFrame() {
         if (nav.b && bStart < 0) bStart = T.now;
         if (bStart >= 0) {
             hold = (float)(T.now - bStart);
-            if (!bDown) { bStart = -1; MmNote("Hold B to leave the room"); }
+            if (!bDown) {
+                bStart = -1;
+                if (seated && RmViewState() != 2) { net::RoomSit(-1); MM_SND |= 4; }   // build 112: B stands up
+                else MmNote("Hold B to leave the room");
+            }
             if (hold >= 1.0f) { bStart = -1; net::RoomLeave(); MM_SND |= 4; MmGoMenu(); return; }
         }
     }
@@ -577,7 +624,10 @@ static void MmRoomFrame() {
             if (m.me) MmImg(dl, "MA10_CMN", 83, LX0 + 8 + ox, y - 26, LX1 - LX0 - 16, 52, MmGlowCol(P.glow, 0.40f * in), ImVec2(0, 0), ImVec2(1, 1), true);
             float w = MmText(dl, g_fUiBold, 27, LX0 + 30 + ox, y, m.me ? MmC(P.gold, in) : MmC(P.text, in), m.name);
             if (m.host) MmPill(dl, LX0 + 30 + w + 42 + ox, y, 64, 24, "HOST", P.gold, false, in);
-            MmText(dl, g_fMenu, 12, LX1 - 24 + ox, y, MmC(P.faint, in), m.me ? "YOU" : "IN ROOM", 2);
+            char where[24];   // build 112
+        if (m.seat >= 0) snprintf(where, sizeof where, "%s %c", m.playing ? "PLAYING" : "TABLE", 'A' + m.seat / 2);
+        else snprintf(where, sizeof where, "%s", m.me ? "YOU" : "IN ROOM");
+        MmText(dl, g_fMenu, 12, LX1 - 24 + ox, y, m.seat >= 0 ? MmC(P.dim, in) : MmC(P.faint, in), where, 2);
         }
         if (R.nMembers > 7) { char s[32]; snprintf(s, sizeof s, "+ %d more", R.nMembers - 7); MmText(dl, g_fUi, 20, LX0 + 30 + ox, 920, MmC(P.dim, in), s); }
         MmPadButton(dl, LX0 + 20 + ox, 912, 'X', MmRGBA(40, 100, 200, in));
@@ -586,16 +636,17 @@ static void MmRoomFrame() {
         if (MmClicked(LX0 + 10, 900, LX1 - 10, 960)) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
     }
 
-    // ---- centre: tables (seats come in the next step) ----
+    // ---- centre: tables (build 112: real seats) ----
     const float TX0 = 500, TY0 = 168, TW = 455, TH = 350, GAP = 18;
-    int nTables = ImClamp(R.set.size / 2, 1, 4);
     for (int ti = 0; ti < 4; ti++) {
         float in = ease(0.15f + 0.07f * ti, 0.5f);
         float x0 = TX0 + (ti % 2) * (TW + GAP), y0 = TY0 + (ti / 2) * (TH + GAP) + (1 - in) * 30, x1 = x0 + TW, y1 = y0 + TH;
-        bool used = ti < nTables;
+        bool used = ti < nTables, mine = seated && R.mySeat / 2 == ti;
         float a = used ? in : 0.35f * in;
+        if (mine) MmImg(dl, "MA10_CMN", 39, x0 - 40, y0 - 40, TW + 80, TH + 80, MmGlowCol(P.glow, (0.30f + 0.15f * T.pulse) * in), ImVec2(0, 0), ImVec2(1, 1), true);
         dl->AddRectFilled(CP(x0 + 6, y0 + 6), CP(x1 - 6, y1 - 6), MmC(P.panel, 0.88f * a), CV(14));
         MmNine(dl, "MA10_CS_NETWORK", 45, 26, 26, x0, y0, x1, y1, MmRGBA(255, 255, 255, a));
+        if (mine) dl->AddRect(CP(x0 + 4, y0 + 4), CP(x1 - 4, y1 - 4), MmC(P.gold, 0.8f * in), CV(12), 0, CV(2.5f));
         ImVec2 c = CP(x0 + 40, y0 + 40);
         dl->AddCircleFilled(c, CV(20), MmC(P.acc, a), 32);
         dl->AddCircle(c, CV(20), MmC(P.text, a), 32, CV(2));
@@ -605,40 +656,78 @@ static void MmRoomFrame() {
         snprintf(nm, sizeof nm, "TABLE %c", 'A' + ti);
         MmText(dl, g_fMenu, 20, x0 + 74, y0 + 40, MmC(P.text, a), nm, 0, 1, MmC(P.ink, a));
         if (!used) { MmText(dl, g_fUi, 20, (x0 + x1) / 2, y0 + 200, MmC(P.faint, a), "Not used at this room size", 1); continue; }
-        MmSeat fr{-1, "", nullptr};
-        MmSeatDraw(dl, x0 + 30, y0 + 74, fr, 1, false);
-        MmSeatDraw(dl, x1 - 160, y0 + 74, fr, 2, false);
-        MmText(dl, g_fMenu, 16, (x0 + x1) / 2, y0 + 190, MmC(P.faint, in), "OPEN", 1);
-        MmText(dl, g_fUi, 19, (x0 + x1) / 2, y0 + 300, MmC(P.faint, in), "Seats come in the next build", 1);
+        const net::RoomMember* sm[2] = {MmSeatOwner(R, ti * 2), MmSeatOwner(R, ti * 2 + 1)};
+        bool playing = sm[0] && sm[1] && (sm[0]->playing || sm[1]->playing);
+        bool canSit = RmViewState() != 2;
+        float sx[2] = {x0 + 30, x1 - 160}, sy = y0 + 74;
+        for (int k = 0; k < 2; k++) {
+            int seat = ti * 2 + k;
+            // the cursor (glow behind the seat) and the mouse
+            bool hov = MmHover(sx[k] - 10, sy - 14, sx[k] + 140, sy + 250);
+            if (hov && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) && g_seatSel != seat) { g_seatSel = seat; MM_SND |= 1; }
+            if (hov && io.MouseClicked[0] && !g_invOpen) { g_seatSel = seat; MmSeatPress(R, seat); }
+            if (g_seatSel == seat && !g_invOpen)
+                MmImg(dl, "MA10_CMN", 39, sx[k] - 50, sy - 50, 230, 330, MmGlowCol(P.glow, (0.45f + 0.2f * T.pulse) * in), ImVec2(0, 0), ImVec2(1, 1), true);
+            const net::RoomMember* m = sm[k];
+            MmSeat st{-1, "", nullptr};
+            if (m) {
+                st.port = m->hasSetup ? SuPortraitOf(m->chara == 0xFF ? -1 : m->chara) : 48;
+                st.name = m->me ? "You" : m->name;
+                st.pill = playing ? "PLAY" : m->ready ? "READY" : "WAIT";
+            }
+            MmSeatDraw(dl, sx[k], sy, st, k + 1, canSit && !m);
+            if (g_seatSel == seat && !g_invOpen) dl->AddRect(CP(sx[k] - 4, sy - 4), CP(sx[k] + 134, sy + 194), MmC(P.gold, in), CV(10), 0, CV(3));
+        }
+        float cx = (x0 + x1) / 2;
+        bool both = sm[0] && sm[1];
+        MmImg(dl, "MA10_CS_NETWORK", 149, cx - 44, y0 + 108, 88, 58, MmRGBA(255, 255, 255, (both ? 1.0f : 0.35f) * in));
+        if (!sm[0] && !sm[1]) {
+            MmText(dl, g_fMenu, 16, cx, y0 + 230, MmC(P.faint, in), "OPEN", 1);
+        } else if (!both) {
+            MmSpinner(dl, cx, y0 + 214, 14, T.tm, P.dim);
+            MmText(dl, g_fUi, 21, cx, y0 + 256, MmC(P.dim, in), "Waiting for", 1);
+            MmText(dl, g_fUi, 21, cx, y0 + 280, MmC(P.dim, in), "a challenger", 1);
+        } else if (playing) {
+            const net::RoomMember* sc = sm[0]->playing ? sm[0] : sm[1];
+            char score[24];
+            snprintf(score, sizeof score, "%d - %d", sc->wins[0], sc->wins[1]);
+            MmText(dl, g_fMenu, 40, cx, y0 + 214, MmC(P.gold, in), score, 1, 2, MmC(P.ink, in));
+            char g[32];
+            if (R.set.setLen > 0) snprintf(g, sizeof g, "GAME %d OF %d", sc->game > 0 ? sc->game : 1, R.set.setLen);
+            else snprintf(g, sizeof g, "GAME %d", sc->game > 0 ? sc->game : 1);
+            MmText(dl, g_fMenu, 12, cx, y0 + 256, MmC(P.dim, in), g, 1);
+            MmText(dl, g_fMenu, 12, cx, y0 + 300, MmC(P.faint, in), "IN MATCH", 1);
+        } else if (mine && RmViewState() == 1) {
+            // both READY: the countdown, then (if the connection takes longer) "connecting"
+            uint32_t el = RmNowMs() - RmViewT0();
+            int left = el < 3000 ? 3 - (int)(el / 1000) : 0;
+            MmText(dl, g_fMenu, 12, cx, y0 + 196, MmC(P.dim, in), "STARTS IN", 1);
+            if (left > 0) {
+                char n[4]; snprintf(n, sizeof n, "%d", left);
+                float f = (el % 1000) / 1000.0f;
+                MmText(dl, g_fMenu, 46 + 10 * (1 - f), cx, y0 + 244, MmC(P.gold, in), n, 1, 2, MmC(P.ink, in));
+            } else {
+                MmSpinner(dl, cx, y0 + 240, 14, T.tm, P.gold);
+                MmText(dl, g_fUi, 20, cx, y0 + 280, MmC(P.dim, in), RmViewConnected() ? "Starting..." : "Connecting...", 1);
+            }
+        } else {
+            MmText(dl, g_fMenu, 11, cx, y0 + 200, MmC(P.faint, in), "STAGE", 1);
+            MmText(dl, g_fUi, 20, cx, y0 + 226, MmC(P.dim, in), "random of", 1);
+            MmText(dl, g_fUi, 20, cx, y0 + 248, MmC(P.dim, in), "both picks", 1);
+            bool r0 = sm[0]->ready, r1 = sm[1]->ready;
+            MmText(dl, g_fUi, 20, cx, y0 + 290, MmC(r0 || r1 ? P.gold : P.dim, in), r0 && r1 ? "Starting..." : "Both READY", 1);
+            MmText(dl, g_fUi, 20, cx, y0 + 312, MmC(r0 || r1 ? P.gold : P.dim, in), r0 && r1 ? "" : "to start", 1);
+        }
     }
 
-    // ---- bottom centre: my match settings (sample until the setup editor exists) ----
+    // ---- bottom centre: my match settings (My setup; Y edits it) ----
     {
         float in = ease(0.4f, 0.5f), oy = (1 - in) * 30;
         float x0 = TX0, x1 = TX0 + 2 * TW + GAP, y0 = 922 + oy, y1 = 1050 + oy;
         MmSection(dl, x0, y0, x1, y1, "MY MATCH SETTINGS", in);
-        MmImg(dl, "MA10_CSEL", 45, x0 + 16, y0 + 12, 70, 102, MmRGBA(255, 255, 255, in));
-        float cy = (y0 + y1) / 2;
-        MmText(dl, g_fMenu, 11, x0 + 102, cy - 20, MmC(P.faint, in), "CHARACTER");
-        MmText(dl, g_fUiBold, 25, x0 + 102, cy + 10, MmC(P.text, in), "Iori Yagami");
-        float x = x0 + 270;
-        MmText(dl, g_fMenu, 11, x, cy - 20, MmC(P.faint, in), "COLOUR");
-        dl->AddRectFilled(CP(x, cy - 2), CP(x + 26, cy + 24), MmRGBA(150, 30, 40, in), CV(4));
-        dl->AddRect(CP(x, cy - 2), CP(x + 26, cy + 24), MmRGBA(255, 210, 110, in), CV(4), 0, CV(2));
-        MmText(dl, g_fUi, 21, x + 36, cy + 11, MmC(P.dim, in), "Colour 3");
-        x = x0 + 400;
-        MmImg(dl, "MA10_CS_NETWORK", 10, x, cy - 30, 100, 64, MmRGBA(255, 255, 255, in));
-        dl->AddRect(CP(x, cy - 30), CP(x + 100, cy + 34), MmRGBA(214, 170, 82, in), 0, 0, CV(1));
-        MmText(dl, g_fMenu, 11, x + 114, cy - 20, MmC(P.faint, in), "STAGE");
-        MmText(dl, g_fUiBold, 25, x + 114, cy + 10, MmC(P.text, in), "Stage 01");
-        x = x0 + 625;
-        MmText(dl, g_fMenu, 11, x, cy - 26, MmC(P.faint, in), "SUPPORT KNIGHTS");
-        MmText(dl, g_fUiBold, 23, x, cy + 0, MmC(P.text, in), "Preset 2: Zoning");
-        MmText(dl, g_fUi, 19, x, cy + 26, MmC(P.dim, in), "Fay, Gawain, Akira Ono");
-        MmPadButton(dl, x1 - 120, cy - 18, 'Y', MmRGBA(210, 170, 20, in));
-        MmText(dl, g_fMenu, 14, x1 - 76, cy, MmC(P.text, in), "Edit");
+        SuRoomPanel(dl, x0, y0, x1, y1, in);
+        if (MmClicked(x0, y0, x1, y1)) { MM_SND |= 2; SuOpen(); MmPageEnd(dl); return; }
     }
-    if (nav.y && !typing) MmNote("The setup editor comes in a later build");
 
     // ---- right: room chat + buttons ----
     const float RX0 = 1464, RX1 = 1870;
@@ -669,18 +758,30 @@ static void MmRoomFrame() {
             g_chatIn[0] = 0;
             g_chatFocus = true;   // stay in the field to keep talking
         } else g_chatFocus = false;
-        MmButton(dl, RX0 + ox, 972, RX0 + 196 + ox, 1036, "INVITE", true, T.pulse);
-        MmButton(dl, RX0 + 212 + ox, 972, RX1 + ox, 1036, "LEAVE", false, T.pulse);
-        if (MmClicked(RX0, 972, RX0 + 196, 1036)) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
-        if (MmClicked(RX0 + 212, 972, RX1, 1036)) { net::RoomLeave(); MM_SND |= 4; MmPageEnd(dl); MmGoMenu(); return; }
+        if (seated) {   // build 112
+            MmButton(dl, RX0 + ox, 972, RX0 + 196 + ox, 1036, R.myReady ? "NOT READY" : "READY", !R.myReady, T.pulse);
+            MmButton(dl, RX0 + 212 + ox, 972, RX1 + ox, 1036, "STAND UP", false, T.pulse);
+            if (MmClicked(RX0, 972, RX0 + 196, 1036)) MmSeatPress(R, R.mySeat);
+            if (MmClicked(RX0 + 212, 972, RX1, 1036) && RmViewState() != 2) { net::RoomSit(-1); MM_SND |= 4; }
+        } else {
+            MmButton(dl, RX0 + ox, 972, RX0 + 196 + ox, 1036, "INVITE", true, T.pulse);
+            MmButton(dl, RX0 + 212 + ox, 972, RX1 + ox, 1036, "LEAVE", false, T.pulse);
+            if (MmClicked(RX0, 972, RX0 + 196, 1036)) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
+            if (MmClicked(RX0 + 212, 972, RX1, 1036)) { net::RoomLeave(); MM_SND |= 4; MmPageEnd(dl); MmGoMenu(); return; }
+        }
     }
 
     // ---- bottom left: prompts ----
-    MmPadButton(dl, 50, 1004, 'X', MmRGBA(40, 100, 200));
-    MmText(dl, g_fMenu, 13, 94, 1022, MmC(P.text), "Invite");
-    MmPadButton(dl, 190, 1004, 'B', MmRGBA(190, 40, 40));
-    MmText(dl, g_fMenu, 13, 234, 1022, MmC(P.text), "Hold to leave room");
-    MmNoteDraw(dl, T.now, 50, 986);
+    {   // build 112
+        const net::RoomMember* o = MmSeatOwner(R, g_seatSel);
+        const char* aText = g_seatSel == R.mySeat ? (R.myReady ? "Not ready" : "Ready") : o ? "" : seated ? "Move" : "Sit";
+        float x = 50;
+        if (aText[0]) { MmPadButton(dl, x, 1004, 'A', MmRGBA(40, 160, 70)); MmText(dl, g_fMenu, 13, x + 44, 1022, MmC(P.text), aText); x += 150; }
+        MmPadButton(dl, x, 1004, 'B', MmRGBA(190, 40, 40));
+        MmText(dl, g_fMenu, 13, x + 44, 1022, MmC(P.text), seated ? "Stand up" : "Hold: leave");
+        MmText(dl, g_fUi, 18, 50, 1056, MmC(P.faint), "X Invite   Y My setup   Tab Chat");
+    }
+    MmNoteDraw(dl, T.now, 50, 970);
 
     // ---- invite friends panel ----
     if (g_invOpen) {
