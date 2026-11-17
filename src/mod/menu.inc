@@ -12,6 +12,19 @@ static ImFont *g_fMenu = nullptr, *g_fUi = nullptr, *g_fUiBold = nullptr;
 static const float MM_MENU_PX = 64.0f;    // size the fonts are made at (canvas pixels, line height); drawn at this size or smaller
 static const float MM_UI_PX = 56.0f;
 // sizes below are given like in a picture editor (em size); ImGui sizes fonts by line height
+// Build 120b: each font also made at smaller sizes; MmText draws with the smallest one that is
+// at least as big as the text, so small text (like HOST) isn't shrunk from the 64 px font and
+// stays sharp. Sizes are line heights in canvas pixels, like MM_MENU_PX.
+static const int MM_TIERS = 4;
+static const float MM_TIER_PX[MM_TIERS] = {16.0f, 24.0f, 34.0f, 46.0f};
+static ImFont *g_tMenu[MM_TIERS] = {}, *g_tUi[MM_TIERS] = {}, *g_tUiBold[MM_TIERS] = {};
+static ImFont* MmSharp(ImFont* f, float sz) {
+    ImFont** t = f == g_fMenu ? g_tMenu : f == g_fUi ? g_tUi : f == g_fUiBold ? g_tUiBold : nullptr;
+    if (!t) return f;
+    for (int i = 0; i < MM_TIERS; i++)
+        if (t[i] && t[i]->FontSize >= sz * 0.92f) return t[i];
+    return f;
+}
 static inline float MmEm(ImFont* f) { return f == g_fMenu ? 1.4219f : (f == g_fUi || f == g_fUiBold) ? 1.574f : 1.0f; }
 
 static struct Mm {
@@ -197,6 +210,7 @@ static float MmText(ImDrawList* dl, ImFont* f, float px, float x, float y, ImU32
     else if (align == 2) p.x -= ts.x;
     p.y -= ts.y * 0.5f;
     p.x = floorf(p.x); p.y = floorf(p.y);
+    f = MmSharp(f, sz);
     if (out > 0) {
         float o = CV(out);
         for (int i = 0; i < 12; i++) {

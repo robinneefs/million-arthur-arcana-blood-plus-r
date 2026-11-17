@@ -28,3 +28,5 @@ BEGIN
   END
 END
 1 ICON "../../assets/icon/arcana_plusr.ico"
+// Build 120b: tells Windows the launcher runs as the user (no admin prompt)
+1 24 "launcher.manifest"

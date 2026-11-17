@@ -359,7 +359,9 @@ static void Frame(float t, float dt) {
     dl->AddRectFilled(P(0, WH - 92), P(WW, WH), C(8, 1, 2, 0.5f));
     dl->AddLine(P(0, WH - 92), P(WW, WH - 92), C(215, 38, 32, 0.55f), 1 * g_s);
     bool steam = game::SteamRunning();
-    Text(g_fText, 14, 28, WH - 66, steam ? kGreen : kWarn, steam ? u8"\u25CF Steam online" : u8"\u25CF Steam is not running: start Steam first");
+    // a status dot (drawn: the font has no dot character, it showed as "?")
+    dl->AddCircleFilled(P(33, WH - 57), 4.5f * g_s, steam ? kGreen : kWarn, 16);
+    Text(g_fText, 14, 44, WH - 66, steam ? kGreen : kWarn, steam ? "Steam online" : "Steam is not running: start Steam first");
     const char* sub = g_gameDirShown.c_str();
     if (st == S_AVAILABLE || st == S_FAILED) sub = "Both players need the same version online";
     Text(g_fText, 13, 28, WH - 45, kFaint, sub);
@@ -457,7 +459,11 @@ static void Frame(float t, float dt) {
         Card(RX, 78, RX + RW, y1);
         Text(g_fText, 15, RX + 18, 90, kFaint, mine.c_str());
         float w = TextW(g_fText, 15, mine.c_str());
-        Text(g_fText, 15, RX + 26 + w, 90, kRed, u8"\u2192");
+        {   // arrow, drawn (not every font has the character)
+            float ax = RX + 28 + w, ay = 100;
+            dl->AddLine(P(ax, ay), P(ax + 13, ay), kRed, 2 * g_s);
+            dl->AddTriangleFilled(P(ax + 16, ay), P(ax + 10, ay - 4), P(ax + 10, ay + 4), kRed);
+        }
         std::string nv = rel.pretty;
         for (auto& c : nv) c = (char)toupper((unsigned char)c);
         Text(g_fTitle, 14, RX + 48 + w, 91, kGold, nv.c_str());
