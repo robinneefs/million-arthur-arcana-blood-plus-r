@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://robinneefs.github.io/million-arthur-arcana-blood-plus-r/sitemap.xml
