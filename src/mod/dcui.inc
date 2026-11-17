@@ -6,7 +6,7 @@
 //   words and A OK.
 // ===========================================================================
 
-enum : uint8_t { DCW_LEFT = 0, DCW_CLOSED, DCW_TIMEOUT, DCW_VERSION, DCW_OTHER, DCW_AWAY };
+enum : uint8_t { DCW_LEFT = 0, DCW_CLOSED, DCW_TIMEOUT, DCW_VERSION, DCW_OTHER, DCW_AWAY, DCW_GAME };
 
 static float DcEase(float t, float start, float len) {
     float v = ImClamp((t - start) / len, 0.0f, 1.0f);
@@ -59,6 +59,7 @@ static void DcReason(char* out, size_t n, uint8_t why, const char* name, bool in
     case DCW_TIMEOUT: snprintf(out, n, "The connection to %s stopped responding.", name); break;
     case DCW_VERSION: snprintf(out, n, "%s has a different version of the mod.", name); break;
     case DCW_AWAY:   snprintf(out, n, "%s switched away from the game for too long.", name); break;
+    case DCW_GAME:   snprintf(out, n, "%s's game files differ from yours. Both: Steam > Verify game files.", name); break;   // build 119
     default:         snprintf(out, n, "The connection to %s was lost.", name); break;
     }
 }

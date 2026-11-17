@@ -492,6 +492,17 @@ static void BuildPtrMap(bool now = false) {
     if (!g_ptrMapBusy.compare_exchange_strong(exp, true)) return;
     SetEvent(g_ptrMapEv);
 }
+// Build 119 (test with Ditn's friend session, 2026-11-17): an in-place rematch restarts the
+// fight about 50 frames into its synced screen, after the map above was made for frame 1. The
+// restart puts the characters' data in newly committed memory, so for up to 10 s their
+// pointers looked like values and counted as desyncs. Now the map is made again (on this
+// thread, at once) right when the fight restarts, and once more before any difference counts.
+static bool g_ptrMapStale = false;
+static uint32_t g_ptrMapRecheckFrame = 0xFFFFFFFFu;
+static void BuildPtrMapNow() {
+    for (int i = 0; i < 100 && g_ptrMapBusy.load(); i++) Sleep(1);   // the worker is making one: let it finish
+    BuildPtrMap(true);
+}
 static inline bool LooksLikePtr(uint32_t v) {
     if (v < 0x10000) return false;
     if (v >= g_exeLo && v < g_exeHi) return false;      // the game's own image: same address on every PC
@@ -501,7 +512,9 @@ static inline bool LooksLikePtr(uint32_t v) {
 static void NetFpCapture(uint32_t k) {
     if (!NetOn() || !N.synced || N.sceneVt != SCENE_BTL || k % FP_EVERY != 1) return;
     if (g_exeHi == g_exeLo || k == 1) BuildPtrMap(true);   // first time, and fresh for each fight's first check (build 81: 80a false alarm at frame 1)
+    else if (g_ptrMapStale) { BuildPtrMapNow(); Log("net: fight restarted in place: memory map made again (frame %u)", k); }
     else if (g_tick - g_ptrMapAt > 600) BuildPtrMap();
+    g_ptrMapStale = false;
     FpLocal& L = N.fl[(k / FP_EVERY) % 8];
     L.frame = k;
     L.seed = t_seed;
@@ -568,24 +581,38 @@ static void NetHandleRaw(const NRaw* m, int n) {
     if (L.frame != m->frame || L.raw.size() != FP_SIZE) return;
     uint32_t lo = m->blk * FP_BLK, hi = lo + FP_BLK > FP_SIZE ? FP_SIZE : lo + FP_BLK;
     if (m->len != hi - lo || n < (int)(offsetof(NRaw, data) + m->len)) return;
-    uint32_t diffs = 0;
+    uint32_t diffs = 0, ptrs = 0;
     char detail[200] = "";
-    for (uint32_t o = lo, i = 0; o + 4 <= hi; o += 4, i++) {
-        uint32_t bit = 1u << (i % 32);
-        if ((L.mask[m->blk][i / 32] | m->mask[i / 32]) & bit) continue;
-        uint32_t w = o / 4;
-        if ((N.fpIgn[w / 32] >> (w % 32)) & 1) continue;
-        uint32_t a, b;
-        memcpy(&a, &L.raw[o], 4);
-        memcpy(&b, &m->data[o - lo], 4);
-        if (a == b) continue;
-        if (m->frame == 1) { N.fpIgn[w / 32] |= 1u << (w % 32); N.fpNoise++; diffs++; continue; }
-        if (diffs < 4 && N.desyncs < 10) {
-            size_t len = strlen(detail);
-            snprintf(detail + len, sizeof detail - len, " P%u+0x%X: %08X vs %08X;", o / 0xA520 + 1, o % 0xA520, a, b);
+    // build 119: values that differ on a later frame are checked again against a fresh memory
+    // map (made once per checked frame): a pointer into memory committed since the last map is
+    // this PC's own address, not a desync. Each PC leaves out its own pointers this way.
+    bool fresh = false;
+    for (int pass = 0; pass < 2; pass++) {
+        diffs = ptrs = 0;
+        detail[0] = 0;
+        for (uint32_t o = lo, i = 0; o + 4 <= hi; o += 4, i++) {
+            uint32_t bit = 1u << (i % 32);
+            if ((L.mask[m->blk][i / 32] | m->mask[i / 32]) & bit) continue;
+            uint32_t w = o / 4;
+            if ((N.fpIgn[w / 32] >> (w % 32)) & 1) continue;
+            uint32_t a, b;
+            memcpy(&a, &L.raw[o], 4);
+            memcpy(&b, &m->data[o - lo], 4);
+            if (a == b) continue;
+            if (m->frame == 1) { N.fpIgn[w / 32] |= 1u << (w % 32); N.fpNoise++; diffs++; continue; }
+            if (fresh && LooksLikePtr(a)) { ptrs++; continue; }
+            if (diffs < 4 && N.desyncs < 10) {
+                size_t len = strlen(detail);
+                snprintf(detail + len, sizeof detail - len, " P%u+0x%X: %08X vs %08X;", o / 0xA520 + 1, o % 0xA520, a, b);
+            }
+            diffs++;
         }
-        diffs++;
+        if (!diffs || m->frame == 1 || fresh) break;
+        if (g_ptrMapRecheckFrame != m->frame) { g_ptrMapRecheckFrame = m->frame; BuildPtrMapNow(); }
+        fresh = true;
     }
+    if (ptrs && N.fpFalse + N.desyncs < 40)
+        Log("net:   frame %u block %u: %u values are pointers into memory the map did not have yet (fine)", m->frame, m->blk, ptrs);
     if (diffs && m->frame == 1) {   // left over from loading: not a desync (see fpIgn)
         Log("net:   frame 1 block %u: %u values differ from the start (left over from loading on each PC, not from play); left out for this fight", m->blk, diffs);
         return;
@@ -1006,11 +1033,15 @@ static void NetHandle(const uint8_t* p, int n) {
         }
         if (m->proto != NET_PROTO || m->build != NET_BUILD) {
             Log("net: the other game runs mod build %u (protocol %u), this one %u (%u)", m->build, m->proto, NET_BUILD, NET_PROTO);
-            NetEnd(m->build > NET_BUILD ? "the other player has a newer version of the mod: close the game and start the launcher to update"
+            NetEnd(m->build > NET_BUILD ? "the other player has a newer version of the mod: you need to update"
                                         : "the other player has an older version of the mod: they need to update");
             return;
         }
-        if (m->codeHash != N.codeHash) { NetEnd("the other player's game version is different"); return; }
+        if (m->codeHash != N.codeHash) {
+            Log("net: the other game's code hash is %08X, this one %08X", m->codeHash, N.codeHash);
+            NetEnd("the other player's game version is different");
+            return;
+        }
         bool first = !N.gotHello;
         if (first) N.rh = *m;
         N.gotHello = true;

@@ -1,6 +1,6 @@
 // Arcana Blood rollback mod - step 5 prototype (test build 85: CPU write watch report also at a desync and a crash).
 //
-// What this DLL does once the launcher has loaded it into the game:
+// What this DLL does once the game has loaded it (through the dinput8.dll loader, build 119):
 //   1. Waits until Steam's DRM layer has decrypted the game code.
 //   2. Checks that the code is exactly the version we studied (else does nothing).
 //   3. Redirects the game's per-frame "scene update" call to our function,
@@ -5062,6 +5062,7 @@ static void AutoTestTick() {
 }
 
 #include "version.h"
+#include "updcheck.inc"          // build 119
 #include "net_session.inc"
 #include "lobby.inc"
 #include "gameart.inc"
@@ -5513,7 +5514,17 @@ static bool Install() {
         Sleep(10);
     }
     Log("Game code verified. Installing hooks.");
+    // build 119: the mod now loads before the game starts (dinput8.dll), so make sure the DRM
+    // layer has finished unpacking the whole code before taking its hash: same value twice in a row
     g_codeHash = CodeHash();
+    for (int i = 0; i < 40; i++) {
+        Sleep(25);
+        uint32_t h = CodeHash();
+        if (h == g_codeHash) break;
+        g_codeHash = h;
+    }
+    Log("Game code hash %08X", g_codeHash);
+    net::SetGameHash(g_codeHash);
     g_wt_timeGetTime = (void*)H_timeGetTime;
     g_wt_QPC = (void*)H_QPC;
     g_wt_GetTickCount = (void*)H_GetTickCount;
@@ -5574,6 +5585,7 @@ static DWORD WINAPI StartThread(LPVOID) {
     AddVectoredExceptionHandler(1, WriterHandler);   // first in line: our own read-only pages
     AddVectoredExceptionHandler(0, CrashLogger);
     if (Install()) {
+        upd::Start();                // build 119: ask GitHub for a newer version (main menu shows it)
         CreateThread(nullptr, 0, TitleThread, nullptr, 0, nullptr);
         CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
         CreateThread(nullptr, 0, BootSampleThread, nullptr, 0, nullptr);   // build 88

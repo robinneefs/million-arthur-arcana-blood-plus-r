@@ -511,11 +511,16 @@ static bool RoomsOpen() {
     return true;
 }
 
+// build 119: the host's game code hash ("arb_game"); a player whose game files differ can't
+// join (the match would end at once with "the other player's game version is different")
+static uint32_t g_gameHash = 0;
 static void WriteRoomData(uint64_t lobby, const RoomSettings& s, int build) {
     char v[32];
     pSetLobbyData(g_mm, lobby, "arb", "1");
     snprintf(v, sizeof v, "%d", build);
     pSetLobbyData(g_mm, lobby, "arb_build", v);
+    snprintf(v, sizeof v, "%08X", g_gameHash);
+    pSetLobbyData(g_mm, lobby, "arb_game", v);
     pSetLobbyData(g_mm, lobby, "name", s.name);
     pSetLobbyData(g_mm, lobby, "host", SteamFriendName(g_me));
     pSetLobbyData(g_mm, lobby, "priv", s.priv ? "1" : "0");
@@ -540,6 +545,13 @@ static void WriteRoomData(uint64_t lobby, const RoomSettings& s, int build) {
 static int DataInt(uint64_t lobby, const char* k, int def) {
     const char* v = pGetLobbyData(g_mm, lobby, k);
     return v && *v ? atoi(v) : def;
+}
+static bool GameMatches(uint64_t lobby) {   // build 119 (rooms from older builds have no arb_game)
+    const char* v = pGetLobbyData(g_mm, lobby, "arb_game");
+    if (!v || !*v || !g_gameHash) return true;
+    uint32_t h = (uint32_t)strtoul(v, nullptr, 16);
+    if (h != g_gameHash) Log("room: the host's game code is %08X, this game's %08X", h, g_gameHash);
+    return h == g_gameHash;
 }
 // Build 112: what each member shows the room (lobby member data, written by that member only):
 //   seat  -1 or table * 2 + side      rdy  1 = READY at the table
@@ -680,6 +692,7 @@ static const char* EnterError(uint32_t r) {
 }
 } // namespace
 
+void SetGameHash(uint32_t h) { g_gameHash = h; }
 void RoomTick(int build) {
     if (!g_rlockInit) { InitializeCriticalSection(&g_rlock); g_rlockInit = true; }
     bool ok = RoomsOpen();
@@ -812,8 +825,12 @@ void RoomTick(int build) {
                         pLeaveLobby(g_mm, r.lobby);
                         RV.state = ROOM_FAILED;
                         int rb = DataInt(r.lobby, "arb_build", 0);   // build 115: say who has to update
-                        if (rb > build) snprintf(RV.err, sizeof RV.err, "That room uses a newer version of the mod (build %d, you have %d). Close the game and start the launcher to update.", rb, build);
+                        if (rb > build) snprintf(RV.err, sizeof RV.err, "That room uses a newer version of the mod (build %d, you have %d). Update the mod (download it from the GitHub page).", rb, build);
                         else snprintf(RV.err, sizeof RV.err, "That room uses an older version of the mod (build %d, you have %d). The host needs to update.", rb, build);
+                    } else if (!GameMatches(r.lobby)) {
+                        pLeaveLobby(g_mm, r.lobby);
+                        RV.state = ROOM_FAILED;
+                        snprintf(RV.err, sizeof RV.err, "Your game files are different from the host's. Both of you: in Steam, right-click the game > Properties > Installed Files > Verify integrity of game files.");
                     } else EnterRoom(r.lobby, build, false);
                 } else { RV.state = ROOM_FAILED; snprintf(RV.err, sizeof RV.err, "%s", EnterError(r.response)); Log("room: join failed (%u)", r.response); }
             } else if (kind == 4) {   // build 114: code search -> join

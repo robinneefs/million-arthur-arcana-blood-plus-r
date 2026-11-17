@@ -5,12 +5,22 @@ Version: see the bottom right of the main menu. This is a BETA: problems are exp
 You need: the Steam version of Million Arthur: Arcana Blood, Steam running,
 and a controller (keyboard and mouse work in the menus).
 
-STARTING
-  Start arcana_launcher.exe (or the "Arcana Blood +R" shortcut). It finds the
-  game through Steam and starts it with the mod. The game's own files are never
-  changed. Keep this folder OUTSIDE the game's folder.
+INSTALLING
+  Installer: run ArcanaBlood-PlusR-...-Setup.exe. It finds the game through
+  Steam and puts two things into the game's folder: dinput8.dll and the
+  ArcanaPlusR folder (this one). No game file is changed.
+  Zip: unzip everything into the game's folder (Steam: right-click the game >
+  Manage > Browse local files), so dinput8.dll sits next to Million Arthur.exe.
   First time: Windows may say "Windows protected your PC". Click "More info",
-  then "Run anyway" (the mod is not code-signed).
+  then "Run anyway" (the mod is not code-signed). If your antivirus removes
+  dinput8.dll or arcana_rollback.dll, restore it there and allow the game
+  folder: it is a false alarm (please tell us on GitHub).
+
+STARTING
+  Start the game from Steam as usual (or the "Arcana Blood +R" shortcut).
+  Steam has to be running. The mod starts with the game.
+  To play WITHOUT the mod: hold Shift while the game starts, or set
+  enabled=0 under [mod] in ArcanaPlusR\rollback.ini.
 
 FIRST STEPS
   - Y on the main menu: My setup (character, colour, stage, Support Knights).
@@ -30,9 +40,9 @@ PLAYING ONLINE
   Both players need the same version of the mod.
 
 UPDATES
-  The launcher checks for a new version when it starts and asks before
-  installing it. Your settings and My setup are kept.
-  (Turn it off with check=0 under [update] in rollback.ini.)
+  When a new version is out, the main menu says so (bottom right). Click it to
+  open the download page, then run the new installer. Your settings and My
+  setup are kept. (Turn the check off with check=0 under [update] in rollback.ini.)
 
 PROBLEMS
   Help > Report a problem > Pack logs puts the logs in one zip on your Desktop
@@ -41,6 +51,6 @@ PROBLEMS
 
 REMOVING THE MOD
   Installer version: Windows Settings > Apps > Arcana Blood +R > Uninstall.
-  Zip version: delete this folder.
+  Zip version: delete dinput8.dll and the ArcanaPlusR folder from the game's folder.
 
 Fan-made, not affiliated with Square Enix or Team Arcana. Code: MIT licence (LICENSE.txt).

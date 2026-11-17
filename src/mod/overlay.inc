@@ -148,14 +148,17 @@ static void DcOnEnd(const char* why) {
     static const struct { const char* s; uint8_t c; } kMap[] = {
         {"the other player left", 0}, {"the other player closed the game", 1}, {"the other game restarted", 1},
         {"no packets from the other game for a while", 2},
-        {"the other player has a different mod build", 3}, {"the other player's game version is different", 3},
+        {"the other player has a different mod build", 3}, {"the other player's game version is different", 6},
+        {"the other player has a newer version of the mod: you need to update", 3},
+        {"the other player has an older version of the mod: they need to update", 3},
         {"the two games went to different screens", 4}, {"the saved data did not get across", 4},
         {"the two games' saved data have different sizes", 4}, {"the other player switched away for too long", 5}};
     int c = -1;
     for (auto& m : kMap) if (!strcmp(m.s, why)) c = m.c;
     if (c < 0) return;                                  // we ended it ourselves
-    if (RoomMatchQuietEnd()) { Log("ui: room match ended before / after the fight (%s): no pop-up", why); return; }   // build 112
-    if (N.st != NS_ON && c != 3) return;                // never got connected
+    bool version = c == 3 || c == 6;                    // build 119: always said (test with Ditn: 12 silent tries)
+    if (!version && RoomMatchQuietEnd()) { Log("ui: room match ended before / after the fight (%s): no pop-up", why); return; }   // build 112
+    if (N.st != NS_ON && !version) return;              // never got connected
     char nm[32] = "";
     EnterCriticalSection(&g_lobbyLock);
     if (LB.haveThem && LB.them.name[0]) snprintf(nm, sizeof nm, "%s", LB.them.name);

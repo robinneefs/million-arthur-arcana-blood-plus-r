@@ -4,9 +4,11 @@ This is a short overview for people (or AIs) who want to build on the mod.
 
 ## Pieces
 
-- **Launcher** (`src/launcher/launcher.cpp`): finds the Steam install of the game, starts it, and loads `arcana_rollback.dll` into it. It never changes files in the game folder.
+- **Loader** (`src/loader/dinput8.cpp`, build 119): a small `dinput8.dll` in the game folder. The game loads `dinput8.dll` by name, and Windows looks in the game's folder first, so it gets ours. It passes every DirectInput call on to the real `dinput8.dll` from the Windows folder and loads `ArcanaPlusR\arcana_rollback.dll`. Holding Shift while the game starts, or `[mod] enabled=0` in rollback.ini, skips the mod. No game file is changed. (Up to build 118 a launcher injected the DLL with CreateRemoteThread; Windows Defender took that for malware.)
+- **Installer** (`installer/installer.nsi`): finds the game through Steam, puts `dinput8.dll` and the `ArcanaPlusR` folder into its folder, makes a shortcut that starts the game through Steam, and an uninstaller.
 - **Mod DLL** (`src/mod/`): runs inside the game.
-  - `mod.cpp`: start-up, hooks on the game's frame loop and input, saving and restoring the game state (rollback), sync and rollback tests, hotkeys.
+  - `updcheck.inc`: asks GitHub's release list for a newer version (the main menu shows it, a click opens the download page; nothing is downloaded).
+  - `mod.cpp`: start-up (waits until Steam's DRM layer has unpacked the game code), hooks on the game's frame loop and input, saving and restoring the game state (rollback), sync and rollback tests, hotkeys.
   - `addr.h`: the game addresses the mod uses, and the original bytes it expects at each patch site, so it refuses to run on a different game version.
   - `net_session.inc`: online sessions (connect, input exchange, rollback timing, clock sync).
   - `transport.cpp` / `transport.h`: the network layer (loopback stand-in, home network UDP, Steam).
