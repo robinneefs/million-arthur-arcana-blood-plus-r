@@ -779,6 +779,14 @@ void RoomTick(int build) {
         RQ.nData = 0;
         // build 113: kicks (host only)
         if (RV.owner == g_me) {
+            // build 120: when the host left and Steam made us the owner, Room search must show
+            // our name as the host (the lobby data still had the old host's)
+            const char* h = pGetLobbyData(g_mm, RV.id, "host");
+            const char* mine = SteamFriendName(g_me);
+            if (mine && mine[0] && (!h || strcmp(h, mine))) {
+                pSetLobbyData(g_mm, RV.id, "host", mine);
+                Log("room: I am the host now, room search shows my name");
+            }
             if (g_kickReq) {
                 bool known = false;
                 for (int i = 0; i < g_nKicked; i++) known |= g_kicked[i] == g_kickReq;

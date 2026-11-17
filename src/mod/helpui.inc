@@ -150,8 +150,8 @@ static void MmHelpFrame() {
     if (HP.tab == 0) {
         MmSection(dl, X0, Y0, X1, Y1, "PLAYING ONLINE");
         float y = Y0 + 80;
-        y = HpStep(dl, LX, y, LW, 1, "Start the game from Steam",
-                   "The mod starts with the game (hold Shift while it starts to play without it). Both players need Steam running and the same version of this mod, shown in the bottom right of the main menu.");
+        y = HpStep(dl, LX, y, LW, 1, "Start the game with the Arcana Blood +R launcher",
+                   "The launcher keeps the mod up to date and starts the game with it (started from Steam, the game is the plain game). Both players need Steam running and the same version of this mod, shown in the bottom right of the main menu.");
         y = HpStep(dl, LX, y, LW, 2, "Set up your fighter",
                    "On the main menu, pick your character, colour, Support Knights and favourite stage under My setup. It's remembered, so a match starts straight away.");
         y = HpStep(dl, LX, y, LW, 3, "Make a room, or join one",
@@ -166,7 +166,7 @@ static void MmHelpFrame() {
         y = HpTip(dl, LX, y, LW, "Connecting takes long or times out",
                   "Leave the room and try again, and check that Steam is online on both PCs (bottom right of the main menu). You don't need to open any ports: Steam carries the connection.");
         y = HpTip(dl, LX, y, LW, "It says the other player runs a different version",
-                  "Both players need the same version of the mod. Get the latest one from the GitHub page (Help > Links). If it says the game files differ, both players: in Steam, right-click the game > Properties > Installed Files > Verify integrity.");
+                  "Both players need the same version of the mod: close the game and open the launcher, it updates the mod. If it says the game files differ, both players: in Steam, right-click the game > Properties > Installed Files > Verify integrity.");
         y = HpTip(dl, LX, y, LW, "The game stutters or jumps a lot",
                   "Raise your input delay a little in Settings > Online (3 or 4 frames). A wired connection, and pausing downloads and streams, also helps.");
         y = HpTip(dl, LX, y, LW, "The connection drops after switching windows",

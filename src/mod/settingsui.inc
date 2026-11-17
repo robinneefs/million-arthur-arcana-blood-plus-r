@@ -17,7 +17,8 @@ struct StAction { const char* name; int slot; const char* game; };
 static const StAction ST_ACT[8] = {{"Weak Attack", gcfg::S_A, "A"},  {"Medium Attack", gcfg::S_B, "B"}, {"Strong Attack", gcfg::S_C, "C"},
                                    {"Elemental Blade", gcfg::S_D, "D"}, {"Roll", gcfg::S_AB, "AB"},     {"Throw", gcfg::S_BC, "BC"},
                                    {"Burst", gcfg::S_AD, "abcD"},       {"Enchant Boost", gcfg::S_ABC, "ABC"}};
-static const int ST_NACT = 8, ST_ROW_VIB = 8, ST_ROW_CHECK = 9;
+// build 120: Button check right below the buttons, Vibration below it (up/down reaches both)
+static const int ST_NACT = 8, ST_ROW_CHECK = 8, ST_ROW_VIB = 9;
 static const int ST_ROWS[5] = {10, 5, 3, 2, 2};
 
 static struct {
@@ -508,19 +509,21 @@ static void MmSettingsFrame() {
                 StBadge(dl, cx - bw / 2, y, b);
             }
         }
-        MmLine(dl, lx0 + 20, Y0 + 600, lx1 - lx0 - 40, 1, MmC(P.acc, 0.6f));
-        float y = Y0 + 660;
-        if (rowHit(ST_ROW_VIB, lx0, y - 34, X0 + 600, y + 34)) StChange(0);
-        StRow(dl, lx0, X0 + 600, y, "Vibration", SR == ST_ROW_VIB, T.pulse);
-        StToggle(dl, X0 + 400, y, g.vib);
+        MmLine(dl, lx0 + 20, Y0 + 588, lx1 - lx0 - 40, 1, MmC(P.acc, 0.6f));
+        float y = Y0 + 632;
         bool bc = SR == ST_ROW_CHECK;
-        float b0 = X0 + 760, b1 = lx1 - 20;
+        float b0 = lx0 + 20, b1 = lx0 + 460;
         if (rowHit(ST_ROW_CHECK, b0, y - 26, b1, y + 26)) StChange(0);
         if (bc) MmImg(dl, "MA10_CMN", 83, b0 - 20, y - 40, b1 - b0 + 40, 80, MmGlowCol(P.glow, 0.45f + 0.1f * T.pulse), ImVec2(0, 0), ImVec2(1, 1), true);
         dl->AddRectFilled(CP(b0, y - 26), CP(b1, y + 26), bc ? MmC(P.gold, 0.95f) : MmC(P.bgTop, 0.9f), CV(6));
         dl->AddRect(CP(b0, y - 26), CP(b1, y + 26), MmC(bc ? P.selOut : P.text, 0.9f), CV(6), 0, CV(2));
         MmText(dl, g_fMenu, 18, (b0 + b1) / 2, y, bc ? MmC(P.ink) : MmC(P.text), "BUTTON CHECK", 1);
-        MmText(dl, g_fUi, 20, lx0 + 20, Y0 + 730, MmC(P.faint), "Start / Pause is always START (controller). Pressing a shortcut's buttons together also works.");
+        MmText(dl, g_fUi, 21, b1 + 40, y, MmC(P.faint), "Press your buttons and see what the game reads");
+        y = Y0 + 706;
+        if (rowHit(ST_ROW_VIB, lx0, y - 34, lx1, y + 34)) StChange(0);
+        StRow(dl, lx0, lx1, y, "Vibration", SR == ST_ROW_VIB, T.pulse);
+        StToggle(dl, X0 + 400, y, g.vib);
+        MmText(dl, g_fUi, 20, lx0 + 20, Y0 + 760, MmC(P.faint), "Start / Pause is always START (controller). Pressing a shortcut's buttons together also works.");
     } else if (ST.tab == 1) {
         MmSection(dl, X0, Y0, X1, Y1, "SOUND");
         const char* lab[3] = {"Music", "Sound effects", "Voices"};

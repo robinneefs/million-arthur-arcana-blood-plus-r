@@ -12,7 +12,7 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "GGenie (fan-made, open source)"
-      VALUE "FileDescription", "Arcana Blood +R loader (passes DirectInput on to Windows, loads the mod)"
+      VALUE "FileDescription", "Arcana Blood +R loader (passes DirectInput on to Windows; loads the mod when the Arcana Blood +R launcher starts the game)"
       VALUE "FileVersion", MOD_VERSION
       VALUE "InternalName", "dinput8"
       VALUE "OriginalFilename", "dinput8.dll"
