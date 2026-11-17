@@ -1,20 +1,22 @@
-// Arcana Blood +R loader (build 119).
+// Arcana Blood +R loader (build 119, launcher-only since build 120).
 //
 // The game loads dinput8.dll (DirectInput) by name when it starts. Windows looks in the
 // game's own folder first, so this small DLL is found there instead of the system one. It
-// hands every DirectInput call on to the real dinput8.dll from the Windows folder, and loads
-// the mod (ArcanaPlusR\arcana_rollback.dll next to it). Nothing is injected from outside and
-// no game file is changed: deleting this file and the ArcanaPlusR folder removes the mod.
+// always hands every DirectInput call on to the real dinput8.dll from the Windows folder.
 //
-// Playing without the mod: hold Shift while the game starts, or set enabled=0 under [mod]
-// in ArcanaPlusR\rollback.ini. If the mod is missing or fails to load, the game runs as usual.
-// What happened goes to ArcanaPlusR\loader_log.txt.
+// It loads the mod ONLY when our launcher started the game: the launcher sets the
+// environment variable ARCANA_PLUSR_DIR to its own folder (where arcana_rollback.dll,
+// rollback.ini and the logs live). Started from Steam directly, the variable is missing and
+// the game runs as usual, untouched. Holding Shift while it starts also skips the mod.
+// Nothing is injected from outside and no game file is changed. The launcher puts this file
+// back after a game reinstall; uninstalling the mod removes it.
+// What happened goes to loader_log.txt in the launcher's folder.
 
 #include <windows.h>
 #include <cstdio>
 
 static HMODULE g_self = nullptr, g_real = nullptr;
-static wchar_t g_dir[MAX_PATH];     // ...\ArcanaPlusR\ (with the backslash)
+static wchar_t g_dir[MAX_PATH];     // the launcher's folder (from ARCANA_PLUSR_DIR), with a backslash at the end
 
 static void Note(const char* fmt, ...) {
     wchar_t p[MAX_PATH];
@@ -71,12 +73,10 @@ LPCVOID WINAPI P_GetdfDIJoystick() {
 // Runs once Windows has finished loading the game's DLLs (a thread started from DllMain
 // only begins after that), so loading the mod here is safe.
 static DWORD WINAPI LoadMod(LPVOID) {
-    wchar_t ini[MAX_PATH], dll[MAX_PATH];
-    _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", g_dir);
+    wchar_t dll[MAX_PATH];
     _snwprintf(dll, MAX_PATH, L"%lsarcana_rollback.dll", g_dir);
     if (GetAsyncKeyState(VK_SHIFT) & 0x8000) { Note("Shift held: the game starts without the mod"); return 0; }
-    if (!GetPrivateProfileIntW(L"mod", L"enabled", 1, ini)) { Note("enabled=0 in rollback.ini: the game starts without the mod"); return 0; }
-    if (GetFileAttributesW(dll) == INVALID_FILE_ATTRIBUTES) { Note("ArcanaPlusR\\arcana_rollback.dll is missing: the game starts without the mod"); return 0; }
+    if (GetFileAttributesW(dll) == INVALID_FILE_ATTRIBUTES) { Note("arcana_rollback.dll is missing: the game starts without the mod"); return 0; }
     HMODULE m = LoadLibraryW(dll);
     if (m) Note("mod loaded");
     else Note("the mod did not load (error %lu): the game starts without it", GetLastError());
@@ -87,10 +87,10 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = self;
         DisableThreadLibraryCalls(self);
-        GetModuleFileNameW(self, g_dir, MAX_PATH);
-        wchar_t* slash = wcsrchr(g_dir, L'\\');
-        if (slash) slash[1] = 0;
-        wcsncat(g_dir, L"ArcanaPlusR\\", MAX_PATH - wcslen(g_dir) - 1);
+        DWORD n = GetEnvironmentVariableW(L"ARCANA_PLUSR_DIR", g_dir, MAX_PATH - 2);
+        if (!n || n >= MAX_PATH - 2) return TRUE;           // not started by our launcher: DirectInput only
+        if (g_dir[n - 1] != L'\\') { g_dir[n] = L'\\'; g_dir[n + 1] = 0; }
+        SetEnvironmentVariableW(L"ARCANA_PLUSR_DIR", nullptr);   // programs the game starts don't get it
         HANDLE t = CreateThread(nullptr, 0, LoadMod, nullptr, 0, nullptr);
         if (t) CloseHandle(t);
     }

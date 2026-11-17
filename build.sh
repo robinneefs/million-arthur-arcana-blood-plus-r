@@ -2,8 +2,8 @@
 # Builds the mod DLL and its loader (dinput8.dll) as 32-bit Windows DLLs with no
 # runtime dependencies (no .NET, no Visual C++ redistributable).
 # Needs MinGW-w64 (i686), e.g. on Ubuntu: apt install g++-mingw-w64-i686
-# Result in build/: dinput8.dll goes into the game folder, everything in build/ArcanaPlusR/
-# into an ArcanaPlusR folder next to it (the installer does both).
+# Result in build/ArcanaPlusR/: the launcher folder (launcher, mod, a copy of dinput8.dll that
+# the launcher puts into the game folder, fonts, logo, settings).
 set -e
 cd "$(dirname "$0")"
 mkdir -p build/obj build/res build/ArcanaPlusR/fonts
@@ -22,7 +22,12 @@ $CXX $FLAGS $IMGUI -Wall -Wno-attributes -shared -o build/ArcanaPlusR/arcana_rol
 # the loader: small, only what Windows has anyway
 $RES src/loader/loader.rc -O coff -o build/res/loader_res.o
 $CXX -O2 -Wall -static -static-libgcc -shared -o build/dinput8.dll src/loader/dinput8.cpp src/loader/dinput8.def build/res/loader_res.o
-i686-w64-mingw32-strip build/ArcanaPlusR/arcana_rollback.dll build/dinput8.dll
+cp build/dinput8.dll build/ArcanaPlusR/
+# the launcher
+$RES src/launcher/launcher.rc -O coff -o build/res/launcher_res.o
+$CXX $FLAGS $IMGUI -Wall -municode -mwindows -o build/ArcanaPlusR/arcana_launcher.exe src/launcher/launcher.cpp \
+  build/obj/*.o build/res/launcher_res.o -ld3d9 -lwinhttp -lbcrypt -lversion -lole32 -lwindowscodecs -lshell32 -luuid -lgdi32 -ldwmapi
+i686-w64-mingw32-strip build/ArcanaPlusR/arcana_rollback.dll build/ArcanaPlusR/dinput8.dll build/ArcanaPlusR/arcana_launcher.exe
 cp config/rollback.ini assets/rollback_logo.png build/ArcanaPlusR/
 cp fonts/* build/ArcanaPlusR/fonts/
 ls -la build build/ArcanaPlusR

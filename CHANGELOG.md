@@ -3,18 +3,22 @@
 Versions follow major.minor.patch: the middle number goes up for new features, the last one for fixes.
 "build" is the internal test build number (also in `src/mod/version.h`).
 
-## Unreleased (test build 119)
+## 0.2.0 beta (build 120, not released yet)
 
-**Install and start (antivirus)**
-- Windows Defender deleted the mod on some PCs: the launcher loaded the mod into the game the way cheat tools do. The launcher is gone. The mod now comes as a small `dinput8.dll` plus an `ArcanaPlusR` folder in the game's folder; the game loads it by itself. No game file is changed.
-- Start the game from Steam (or the installer's shortcut). Hold Shift while it starts to play without the mod, or set `[mod] enabled=0` in rollback.ini.
-- The installer finds the game through Steam, takes over Settings and My setup from the old install and removes it.
-- Update check: the main menu says when a new version is out; a click opens the download page. The mod no longer downloads files itself.
-- The DLLs and the installer have proper file details (name, version, description).
+**Launcher and install (antivirus)**
+- Windows Defender deleted the mod on some PCs: the old launcher loaded the mod into the game the way cheat tools do. Nothing is injected any more: the game loads a small `dinput8.dll` from its own folder, and that loads the mod.
+- The launcher is back, in the main menu's style: it checks for a new version each time it opens, can install it with one click (download, checksum check, backup, a few seconds; nothing changes if it fails), and Play starts the game with the mod.
+- The mod only starts when the launcher starts the game. Started from Steam, the game is the plain game. Hold Shift while it starts to skip the mod once.
+- The game folder only gets `dinput8.dll`, and the launcher checks it on every Play, so a reinstalled or moved game gets it back by itself. Another mod's `dinput8.dll` is kept as `dinput8.dll.before-plusr` (the launcher asks first) and comes back on uninstall.
+- The installer goes back to its own folder (%LOCALAPPDATA%\Arcana Blood +R) and takes over Settings and My setup from older installs.
+- The main menu still says when a new version came out while you play; the launcher installs it.
+- The DLLs, the launcher and the installer have proper file details (name, version, description).
 
 **Fixes**
 - The DESYNC count could go up for a few seconds after an in-place rematch while the game was fine (a false alarm: the restarted fight's data moved in memory).
 - Players whose game files differ can no longer sit at the same table and fail silently: joining the room says so, and a match that can't start shows a pop-up.
+- Room search showed the old host's name after the host left the room; it now shows the new host.
+- Settings > Controls: Vibration sat next to Button check, and Right toggled it instead of moving on. Button check and Vibration are now one below the other.
 
 ## 0.1.0 beta (build 118, first release)
 

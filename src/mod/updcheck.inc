@@ -1,9 +1,7 @@
 // ===========================================================================
-// Build 119: update check inside the mod (included into mod.cpp). Before, the launcher
-// asked GitHub and could download and install the new files itself; the launcher is gone
-// now (the mod loads through dinput8.dll), and a program that downloads programs is one of
-// the things antivirus scanners dislike. So the mod only asks GitHub which releases there
-// are; when one is newer, the main menu says so and a click opens the download page.
+// Build 119/120: update check inside the mod (included into mod.cpp). The launcher installs
+// updates before the game starts; this only notices a release that came out while the game
+// was running, and the main menu then says to close the game and open the launcher.
 //
 // rollback.ini [update]: check=0 turns it off; repo=owner/name and test_version=x.y.z are
 // for testing.
@@ -177,11 +175,4 @@ static DWORD WINAPI CheckThread(LPVOID) {
 }
 static void Start() { CreateThread(nullptr, 0, CheckThread, nullptr, 0, nullptr); }
 static const char* NewVersion() { return g_have.load() ? g_newVer : nullptr; }
-static void OpenDownloadPage() {
-    wchar_t url[256];
-    _snwprintf(url, 256, L"https://github.com/%ls/releases", g_repo);
-    ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
-    Log("update check: opened the download page");
-}
-
 }  // namespace upd

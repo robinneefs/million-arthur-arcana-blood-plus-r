@@ -575,15 +575,11 @@ static void MmMainFrame() {
     MmImg(dl, "MA10_CS_NETWORK", 147, 1430, 1022, 34, 34);
     MmText(dl, g_fMenu, 14, 1474, 1040, g_rv.steam ? MmRGBA(150, 220, 170) : MmC(P.faint), g_rv.steam ? "STEAM ONLINE" : "STEAM NOT FOUND");
     MmText(dl, g_fMenu, 13, 1870, 1040, MmC(P.gold), MOD_VERSION_SHORT, 2);
-    if (const char* nv = upd::NewVersion()) {   // build 119: the mod's own update check (updcheck.inc)
+    if (const char* nv = upd::NewVersion()) {   // build 120: the launcher installs updates
         char t[112];
-        snprintf(t, sizeof t, "UPDATE AVAILABLE: V%s  -  CLICK HERE TO OPEN THE DOWNLOAD PAGE", nv);
+        snprintf(t, sizeof t, "UPDATE AVAILABLE: V%s  -  CLOSE THE GAME AND OPEN THE LAUNCHER TO UPDATE", nv);
         for (char* c = t; *c; c++) *c = (char)toupper((unsigned char)*c);
-        float w = MmText(dl, g_fMenu, 13, 1870, 1012, MmC(P.gold), t, 2);
-        if (MM.screen == 0 && ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(1860 - w, 998), CP(1880, 1026), false)) {
-            MM_SND |= 2;
-            upd::OpenDownloadPage();
-        }
+        MmText(dl, g_fMenu, 13, 1870, 1012, MmC(P.gold), t, 2);
     }
 
     dl->PopClipRect();
