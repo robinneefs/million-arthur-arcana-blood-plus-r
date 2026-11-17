@@ -45,6 +45,7 @@ static void Say(const wchar_t* fmt, ...) {
     fflush(g_log);
 }
 
+static std::wstring W8(const char* s) { std::wstring w; while (*s) w += (wchar_t)(unsigned char)*s++; return w; }
 #include "update.inc"
 #include "game.inc"
 
@@ -148,15 +149,47 @@ static WORD PadPressed() {
 static const WORD PAD_A = 0x1000, PAD_B = 0x2000, PAD_X = 0x4000;
 
 // ---- drawing helpers ----
+// Build 120b: every text size has its own font in the atlas, made at exactly that pixel size,
+// so small text is sharp (it was shrunk from one big font before), and small sizes are a bit
+// bigger than in the mock-up so they read well.
+static float Bump(float px) { return px <= 15 ? px + 2 : px; }
+struct SizedFont { int px; ImFont* f; };
+struct Family { const char* file; std::vector<SizedFont> sizes; };
+static Family g_famTitle{"Michroma-Regular.ttf", {}}, g_famText{"SairaSemiCondensed-Regular.ttf", {}}, g_famBold{"SairaSemiCondensed-Bold.ttf", {}};
+static Family* Fam(ImFont* f) { return f == g_fTitle ? &g_famTitle : f == g_fBold ? &g_famBold : &g_famText; }
+static ImFont* Sized(ImFont* f, float px, float& drawPx) {
+    drawPx = Bump(px) * g_s;
+    Family* fam = Fam(f);
+    int want = (int)(drawPx + 0.5f);
+    ImFont* best = f;
+    int bestD = 1 << 30;
+    for (auto& s : fam->sizes) {
+        int d = abs(s.px - want);
+        if (d < bestD) { bestD = d; best = s.f; }
+    }
+    if (best != f && bestD == 0) drawPx = (float)want;
+    return best;
+}
+static float TextW(ImFont* f, float px, const char* s) {
+    float sz;
+    ImFont* g = Sized(f, px, sz);
+    return g->CalcTextSizeA(sz, FLT_MAX, 0, s).x / g_s;
+}
 static void Text(ImFont* f, float px, float x, float y, ImU32 col, const char* s, int align = 0, float wrap = 0) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    float sz = px * g_s;
-    ImVec2 ts = f->CalcTextSizeA(sz, FLT_MAX, wrap * g_s, s);
+    float sz;
+    ImFont* g = Sized(f, px, sz);
+    ImVec2 ts = g->CalcTextSizeA(sz, FLT_MAX, wrap * g_s, s);
     ImVec2 p = P(x, y);
+    p.y -= (sz - px * g_s) * 0.5f;          // bigger text stays centred on the same line
     if (align == 1) p.x -= ts.x * 0.5f; else if (align == 2) p.x -= ts.x;
-    dl->AddText(f, sz, ImVec2(floorf(p.x), floorf(p.y)), col, s, nullptr, wrap * g_s);
+    dl->AddText(g, sz, ImVec2(floorf(p.x), floorf(p.y)), col, s, nullptr, wrap * g_s);
 }
-static float TextH(ImFont* f, float px, const char* s, float wrap) { return f->CalcTextSizeA(px * g_s, FLT_MAX, wrap * g_s, s).y / g_s; }
+static float TextH(ImFont* f, float px, const char* s, float wrap) {
+    float sz;
+    ImFont* g = Sized(f, px, sz);
+    return g->CalcTextSizeA(sz, FLT_MAX, wrap * g_s, s).y / g_s;
+}
 static bool Hover(float x0, float y0, float x1, float y1) { return ImGui::IsMouseHoveringRect(P(x0, y0), P(x1, y1), false); }
 static bool Clicked(float x0, float y0, float x1, float y1) { return Hover(x0, y0, x1, y1) && ImGui::IsMouseReleased(0); }
 
@@ -423,7 +456,7 @@ static void Frame(float t, float dt) {
         float y1 = 78 + 62 + notesH + (rel.notes.empty() ? 0 : 22) + 26;
         Card(RX, 78, RX + RW, y1);
         Text(g_fText, 15, RX + 18, 90, kFaint, mine.c_str());
-        float w = g_fText->CalcTextSizeA(15 * g_s, FLT_MAX, 0, mine.c_str()).x / g_s;
+        float w = TextW(g_fText, 15, mine.c_str());
         Text(g_fText, 15, RX + 26 + w, 90, kRed, u8"\u2192");
         std::string nv = rel.pretty;
         for (auto& c : nv) c = (char)toupper((unsigned char)c);
@@ -601,15 +634,28 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     io.IniFilename = nullptr;
     static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2190, 0x2193, 0x25CF, 0x25CF, 0};
     std::wstring fd = g_ourDir + L"fonts\\";
-    char p1[MAX_PATH * 3], p2[MAX_PATH * 3], p3[MAX_PATH * 3];
-    WideCharToMultiByte(CP_UTF8, 0, (fd + L"Michroma-Regular.ttf").c_str(), -1, p1, sizeof p1, nullptr, nullptr);
-    WideCharToMultiByte(CP_UTF8, 0, (fd + L"SairaSemiCondensed-Regular.ttf").c_str(), -1, p2, sizeof p2, nullptr, nullptr);
-    WideCharToMultiByte(CP_UTF8, 0, (fd + L"SairaSemiCondensed-Bold.ttf").c_str(), -1, p3, sizeof p3, nullptr, nullptr);
     ImFontConfig c;
-    c.OversampleH = 2;
-    if (game::FileExists(fd + L"Michroma-Regular.ttf")) g_fTitle = io.Fonts->AddFontFromFileTTF(p1, 20 * g_s, &c, ranges);
-    if (game::FileExists(fd + L"SairaSemiCondensed-Regular.ttf")) g_fText = io.Fonts->AddFontFromFileTTF(p2, 18 * g_s, &c, ranges);
-    if (game::FileExists(fd + L"SairaSemiCondensed-Bold.ttf")) g_fBold = io.Fonts->AddFontFromFileTTF(p3, 18 * g_s, &c, ranges);
+    c.OversampleH = 3;
+    c.OversampleV = 1;
+    // the sizes the screens use (after Bump), each made at its real pixel size
+    static const int titlePx[] = {11, 12, 13, 14, 16, 18, 20, 26};
+    static const int textPx[] = {15, 16, 17};
+    auto load = [&](Family& fam, const int* px, int n) {
+        std::wstring path = fd + W8(fam.file);
+        if (!game::FileExists(path)) return;
+        char p8[MAX_PATH * 3];
+        WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, p8, sizeof p8, nullptr, nullptr);
+        for (int i = 0; i < n; i++) {
+            int sz = (int)(px[i] * g_s + 0.5f);
+            if (ImFont* f = io.Fonts->AddFontFromFileTTF(p8, (float)sz, &c, ranges)) fam.sizes.push_back({sz, f});
+        }
+    };
+    load(g_famTitle, titlePx, 8);
+    load(g_famText, textPx, 3);
+    load(g_famBold, textPx, 3);
+    if (!g_famTitle.sizes.empty()) g_fTitle = g_famTitle.sizes.back().f;
+    if (!g_famText.sizes.empty()) g_fText = g_famText.sizes.back().f;
+    if (!g_famBold.sizes.empty()) g_fBold = g_famBold.sizes.back().f;
     ImFont* def = io.Fonts->AddFontDefault();
     if (!g_fTitle) g_fTitle = def;
     if (!g_fText) g_fText = def;
