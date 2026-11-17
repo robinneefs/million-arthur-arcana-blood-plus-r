@@ -3,6 +3,19 @@
 Versions follow major.minor.patch: the middle number goes up for new features, the last one for fixes.
 "build" is the internal test build number (also in `src/mod/version.h`).
 
+## Unreleased (test build 119)
+
+**Install and start (antivirus)**
+- Windows Defender deleted the mod on some PCs: the launcher loaded the mod into the game the way cheat tools do. The launcher is gone. The mod now comes as a small `dinput8.dll` plus an `ArcanaPlusR` folder in the game's folder; the game loads it by itself. No game file is changed.
+- Start the game from Steam (or the installer's shortcut). Hold Shift while it starts to play without the mod, or set `[mod] enabled=0` in rollback.ini.
+- The installer finds the game through Steam, takes over Settings and My setup from the old install and removes it.
+- Update check: the main menu says when a new version is out; a click opens the download page. The mod no longer downloads files itself.
+- The DLLs and the installer have proper file details (name, version, description).
+
+**Fixes**
+- The DESYNC count could go up for a few seconds after an in-place rematch while the game was fine (a false alarm: the restarted fight's data moved in memory).
+- Players whose game files differ can no longer sit at the same table and fail silently: joining the room says so, and a match that can't start shows a pop-up.
+
 ## 0.1.0 beta (build 118, first release)
 
 The first public version. Everything below is new compared to the old test builds.

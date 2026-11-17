@@ -509,6 +509,7 @@ static void Tick() {
                 restarting = false;
                 Log("boot: fight frame %u: the fight starts again in place (phase %d)", stateFrames, (int)ph);
                 g_postOn = false;
+                g_ptrMapStale = true;      // build 119: the restart moved the characters' data (see net_session.inc)
                 FightStarts();
             }
             if (rmPending && g_frame >= rmAt) RematchNow();

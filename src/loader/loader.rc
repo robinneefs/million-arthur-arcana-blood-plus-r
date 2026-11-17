@@ -1,0 +1,29 @@
+// Build 119: file details (Properties > Details) for the dinput8.dll loader
+#include <winver.h>
+#include "../mod/version.h"
+1 VERSIONINFO
+FILEVERSION MOD_VER_RC
+PRODUCTVERSION MOD_VER_RC
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DLL
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "GGenie (fan-made, open source)"
+      VALUE "FileDescription", "Arcana Blood +R loader (passes DirectInput on to Windows, loads the mod)"
+      VALUE "FileVersion", MOD_VERSION
+      VALUE "InternalName", "dinput8"
+      VALUE "OriginalFilename", "dinput8.dll"
+      VALUE "ProductName", "Arcana Blood +R"
+      VALUE "ProductVersion", MOD_VERSION
+      VALUE "LegalCopyright", "MIT licence. github.com/robinneefs/million-arthur-arcana-blood-plus-r"
+      VALUE "Comments", "Fan-made rollback netcode mod for Million Arthur: Arcana Blood. Not affiliated with Square Enix or Team Arcana."
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

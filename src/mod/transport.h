@@ -79,6 +79,7 @@ struct RoomView {
     bool myReady;
 };
 void RoomTick(int build);          // game thread, every frame
+void SetGameHash(uint32_t h);      // build 119: the game code's hash (rooms check it when you join)
 void RoomGet(RoomView* out);       // a copy, any thread
 void RoomCreate(const RoomSettings& s);
 void RoomSearch();

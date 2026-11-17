@@ -1,26 +1,29 @@
 #!/bin/sh
-# Builds a release: dist/ArcanaBlood-PlusR-v<version>.zip (what the launcher's update check
-# downloads), dist/ArcanaBlood-PlusR-v<version>-Setup.exe (installer) and SHA256SUMS.txt.
+# Builds a release: dist/ArcanaBlood-PlusR-v<version>.zip (unzip into the game's folder),
+# dist/ArcanaBlood-PlusR-v<version>-Setup.exe (installer) and SHA256SUMS.txt.
 # Needs: MinGW-w64 (i686), zip, nsis (apt install g++-mingw-w64-i686 zip nsis).
-# The version comes from src/mod/version.h (MOD_VERSION).
+# The version comes from src/mod/version.h (MOD_VERSION, MOD_BUILD).
 set -e
 cd "$(dirname "$0")/.."
 VER=$(sed -n 's/^#define MOD_VERSION "\(.*\)"/\1/p' src/mod/version.h)
-[ -n "$VER" ] || { echo "no MOD_VERSION in src/mod/version.h"; exit 1; }
+BUILD=$(sed -n 's/^#define MOD_BUILD \([0-9]*\).*/\1/p' src/mod/version.h)
+[ -n "$VER" ] && [ -n "$BUILD" ] || { echo "no MOD_VERSION / MOD_BUILD in src/mod/version.h"; exit 1; }
+VNUM=$(echo "$VER" | sed 's/-.*//')
 NAME="ArcanaBlood-PlusR-v$VER"
 sh build.sh > /dev/null
 rm -rf "dist/$NAME" "dist/$NAME.zip" "dist/$NAME-Setup.exe" dist/SHA256SUMS.txt
-mkdir -p "dist/$NAME/fonts"
-cp build/arcana_launcher.exe build/arcana_rollback.dll assets/rollback_logo.png config/rollback.ini "dist/$NAME/"
-cp fonts/* "dist/$NAME/fonts/"
+mkdir -p "dist/$NAME/ArcanaPlusR/fonts"
+cp build/dinput8.dll "dist/$NAME/"
+cp build/ArcanaPlusR/arcana_rollback.dll assets/rollback_logo.png config/rollback.ini "dist/$NAME/ArcanaPlusR/"
+cp fonts/* "dist/$NAME/ArcanaPlusR/fonts/"
 # Windows line endings for the text files players open
-for f in config/README.txt LICENSE; do
-  b=$(basename "$f" .txt)
-  sed 's/\r*$/\r/' "$f" > "dist/$NAME/$b.txt"
-done
-sed -i 's/\r*$/\r/' "dist/$NAME/rollback.ini"
-(cd dist && zip -qr "$NAME.zip" "$NAME")
-makensis -V2 -DVERSION="$VER" -DICON="$(pwd)/assets/icon/arcana_plusr.ico" -DSRC="$(pwd)/dist/$NAME" -DOUT="$(pwd)/dist/$NAME-Setup.exe" installer/installer.nsi
+sed 's/\r*$/\r/' config/README.txt > "dist/$NAME/ArcanaPlusR/README.txt"
+sed 's/\r*$/\r/' LICENSE > "dist/$NAME/ArcanaPlusR/LICENSE.txt"
+cp "dist/$NAME/ArcanaPlusR/README.txt" "dist/$NAME/README - Arcana Blood +R.txt"
+sed -i 's/\r*$/\r/' "dist/$NAME/ArcanaPlusR/rollback.ini"
+# the zip holds the files as they go into the game folder (no extra folder level)
+(cd "dist/$NAME" && zip -qr "../$NAME.zip" .)
+makensis -V2 -DVERSION="$VER" -DVERSION_RC="$VNUM.$BUILD" -DICON="$(pwd)/assets/icon/arcana_plusr.ico" -DSRC="$(pwd)/dist/$NAME" -DOUT="$(pwd)/dist/$NAME-Setup.exe" installer/installer.nsi
 (cd dist && sha256sum "$NAME.zip" "$NAME-Setup.exe" > SHA256SUMS.txt)
 echo "dist/$NAME.zip"
 echo "dist/$NAME-Setup.exe"
