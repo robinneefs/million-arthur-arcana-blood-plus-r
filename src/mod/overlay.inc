@@ -568,6 +568,11 @@ static void UiLoadFonts(float scale) {
     g_fMenu = load("Michroma-Regular.ttf", MM_MENU_PX);                 // build 91: main menu preview
     g_fUi = load("SairaSemiCondensed-Regular.ttf", MM_UI_PX);
     g_fUiBold = load("SairaSemiCondensed-Bold.ttf", MM_UI_PX);
+    for (int i = 0; i < MM_TIERS; i++) {   // build 120b: smaller copies for small text (MmSharp)
+        g_tMenu[i] = load("Michroma-Regular.ttf", MM_TIER_PX[i] * MM_MENU_PX / MM_UI_PX);
+        g_tUi[i] = load("SairaSemiCondensed-Regular.ttf", MM_TIER_PX[i]);
+        g_tUiBold[i] = load("SairaSemiCondensed-Bold.ttf", MM_TIER_PX[i]);
+    }
     io.Fonts->Build();
 }
 
