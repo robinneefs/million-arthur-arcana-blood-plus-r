@@ -3,7 +3,7 @@
 Versions follow major.minor.patch: the middle number goes up for new features, the last one for fixes.
 "build" is the internal test build number (also in `src/mod/version.h`).
 
-## 0.2.0 beta (build 120, not released yet)
+## 0.2.0 beta (build 120, 2026-11-18)
 
 **Launcher and install (antivirus)**
 - Windows Defender deleted the mod on some PCs: the old launcher loaded the mod into the game the way cheat tools do. Nothing is injected any more: the game loads a small `dinput8.dll` from its own folder, and that loads the mod.
@@ -13,11 +13,21 @@ Versions follow major.minor.patch: the middle number goes up for new features, t
 - The installer goes back to its own folder (%LOCALAPPDATA%\Arcana Blood +R) and takes over Settings and My setup from older installs.
 - The main menu still says when a new version came out while you play; the launcher installs it.
 - The DLLs, the launcher and the installer have proper file details (name, version, description).
+- The launcher is now called `Arcana Blood +R.exe` (was `arcana_launcher.exe`), with bigger, sharper text, and it no longer asks for admin rights (no UAC prompt) when it starts.
+
+**Look and feel**
+- A pass over every screen: panels, tables, buttons and prompts line up on one grid with the same padding on all sides (main menu, room, Room search, Create room, My setup, Settings, after-match screen, Connection lost pop-up).
+- Small text in the mod's menus (like the HOST tag) is drawn from a font made at that size, so it stays sharp.
+- My setup: each colour square is centred on the character's face; the colour squares, character and stage grids fit their boxes; the preview is wider.
+- After a fight, CHOOSING stays in place while its dots come and go.
+- Settings > Logs shows the real version.
 
 **Fixes**
 - The DESYNC count could go up for a few seconds after an in-place rematch while the game was fine (a false alarm: the restarted fight's data moved in memory).
 - Players whose game files differ can no longer sit at the same table and fail silently: joining the room says so, and a match that can't start shows a pop-up.
 - Room search showed the old host's name after the host left the room; it now shows the new host.
+- Each stage preview in My setup now loads the stage it shows (7 of the 8 previews pointed at another stage).
+- Creating a room while Steam is in Offline Mode said "code 3"; it now says Steam is offline and how to go online.
 - Settings > Controls: Vibration sat next to Button check, and Right toggled it instead of moving on. Button check and Vibration are now one below the other.
 
 ## 0.1.0 beta (build 118, first release)
