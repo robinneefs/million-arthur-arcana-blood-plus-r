@@ -69,17 +69,17 @@ static void PmCard(ImDrawList* dl, const PmView& v, int side, float in, float no
     ImU32 edge = c == PM_REMATCH ? MmC(P.selOut, in) : c == PM_ROOM ? MmC(P.dim, 0.8f * in) : MmC(P.acc, 0.6f * in);
     dl->AddRectFilled(CP(cx0, cy - 40), CP(cx1, cy + 40), fill, CV(40));
     dl->AddRect(CP(cx0, cy - 40), CP(cx1, cy + 40), edge, CV(40), 0, CV(2));
-    const char* what;
-    char dots[24];
-    if (c == PM_REMATCH) what = "WANTS A REMATCH";
-    else if (c == PM_ROOM) what = "BACK TO ROOM";
-    else {
-        int k = (int)(now * 2.5f) % 4;
-        snprintf(dots, sizeof dots, "CHOOSING%.*s", k, "...");
-        what = dots;
-    }
     ImU32 tc = c == PM_REMATCH ? MmC(P.selOut, in) : c == PM_ROOM ? MmC(P.text, in) : MmC(P.faint, in);
-    MmText(dl, g_fMenu, 19, (cx0 + cx1) * 0.5f, cy, tc, what, 1);
+    if (c == PM_REMATCH || c == PM_ROOM) {
+        MmText(dl, g_fMenu, 19, (cx0 + cx1) * 0.5f, cy, tc, c == PM_REMATCH ? "WANTS A REMATCH" : "BACK TO ROOM", 1);
+    } else {
+        // build 120d: CHOOSING stays put (centred as if all three dots were there); the dots come and go after it
+        int k = (int)(now * 2.5f) % 4;
+        float full = MmText(dl, g_fMenu, 19, -9999, -9999, 0, "CHOOSING...");
+        float x = (cx0 + cx1) * 0.5f - full * 0.5f;
+        float w = MmText(dl, g_fMenu, 19, x, cy, tc, "CHOOSING");
+        if (k) MmText(dl, g_fMenu, 19, x + w, cy, tc, &"..."[3 - k]);
+    }
 }
 
 static void PmDraw(const PmView& v) {
