@@ -360,7 +360,7 @@ static void Frame(float t, float dt) {
     dl->AddLine(P(0, WH - 92), P(WW, WH - 92), C(215, 38, 32, 0.55f), 1 * g_s);
     bool steam = game::SteamRunning();
     // a status dot (drawn: the font has no dot character, it showed as "?")
-    dl->AddCircleFilled(P(33, WH - 57), 4.5f * g_s, steam ? kGreen : kWarn, 16);
+    dl->AddCircleFilled(P(33, WH - 59.5f), 3.6f * g_s, steam ? kGreen : kWarn, 16);
     Text(g_fText, 14, 44, WH - 66, steam ? kGreen : kWarn, steam ? "Steam online" : "Steam is not running: start Steam first");
     const char* sub = g_gameDirShown.c_str();
     if (st == S_AVAILABLE || st == S_FAILED) sub = "Both players need the same version online";
@@ -602,6 +602,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_s = GetDeviceCaps(sdc, LOGPIXELSX) / 96.0f;
     ReleaseDC(nullptr, sdc);
     if (g_s < 1) g_s = 1;
+    g_s *= 1.2f;   // build 120g: the whole window (and all its text) a size bigger, easier to read
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     WNDCLASSEXW wc{sizeof wc, CS_CLASSDC, WndProc, 0, 0, inst, LoadIconW(inst, MAKEINTRESOURCEW(1)), LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"ArcanaBloodPlusRLauncher", nullptr};
