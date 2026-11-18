@@ -325,7 +325,7 @@ static DWORD WINAPI UpdateThread(LPVOID) {
     std::vector<TarFile> files;
     if (!ReadTar(tar, files)) { Fail("The download does not hold the mod's files."); return 0; }
     bool hasLauncher = false;
-    for (auto& f : files) hasLauncher |= !_stricmp(f.name.c_str(), "arcana_launcher.exe");
+    for (auto& f : files) hasLauncher |= !_stricmp(f.name.c_str(), LAUNCHER_EXE_A);
     Say(L"  Download checked (SHA-256 matches), %u files.", (unsigned)files.size());
     g_step = 2;
 
@@ -333,7 +333,7 @@ static DWORD WINAPI UpdateThread(LPVOID) {
     std::wstring bak = g_dir + L"update-backup\\";
     RemoveTree(bak.substr(0, bak.size() - 1));
     CreateDirectoryW(bak.c_str(), nullptr);
-    std::wstring self = g_dir + L"arcana_launcher.exe";
+    std::wstring self = g_dir + LAUNCHER_EXE;
     DeleteFileW((self + L".old").c_str());
     std::vector<std::wstring> done;
     bool ok = true;
@@ -346,7 +346,7 @@ static DWORD WINAPI UpdateThread(LPVOID) {
         std::wstring dst = g_dir + rel8;
         if (GetFileAttributesW(dst.c_str()) != INVALID_FILE_ATTRIBUTES) {
             if (!CopyFileW(dst.c_str(), (bak + rel8).c_str(), FALSE)) { ok = false; break; }
-            if (!_wcsicmp(rel8.c_str(), L"arcana_launcher.exe") && !MoveFileExW(dst.c_str(), (dst + L".old").c_str(), MOVEFILE_REPLACE_EXISTING)) { ok = false; break; }
+            if (!_wcsicmp(rel8.c_str(), LAUNCHER_EXE) && !MoveFileExW(dst.c_str(), (dst + L".old").c_str(), MOVEFILE_REPLACE_EXISTING)) { ok = false; break; }
         }
         done.push_back(rel8);
         if (!WriteFileAll(dst, tar.data() + f.off, f.size)) { ok = false; break; }

@@ -10,14 +10,14 @@ INSTALLING
   folder (%LOCALAPPDATA%\Arcana Blood +R) and makes an "Arcana Blood +R"
   shortcut on the Desktop and in the Start menu. No game file is changed.
   Zip: unzip everything into a folder of your own (not the game's folder) and
-  start arcana_launcher.exe from there.
+  start Arcana Blood +R.exe from there.
   First time: Windows may say "Windows protected your PC". Click "More info",
   then "Run anyway" (the mod is not code-signed). If your antivirus removes a
   file of the mod, restore it and allow the folder: it is a false alarm
   (please tell us on GitHub).
 
 STARTING
-  Start "Arcana Blood +R" (arcana_launcher.exe). It checks for updates, then
+  Start "Arcana Blood +R" (Arcana Blood +R.exe). It checks for updates, then
   Play starts the game with the mod. Steam has to be running.
   Play puts one small file into the game's folder: dinput8.dll. It does
   nothing unless the launcher started the game, so the game started from
