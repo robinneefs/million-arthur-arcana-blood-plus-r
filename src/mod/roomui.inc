@@ -192,16 +192,17 @@ static void MmSection(ImDrawList* dl, float x0, float y0, float x1, float y1, co
     MmFieldBox(dl, x0, y0, x1, y1, title, MmC(MmP().panel, 0.86f * a));
 }
 
-struct MmSeat { int port; const char* name; const char* pill; };   // port < 0: free seat
+struct MmSeat { int port; const char* name; const char* pill; };
+static const float MM_SEAT_W = 120, MM_SEAT_H = 176;   // build 120h: was 130 x 190   // port < 0: free seat
 static void MmSeatDraw(ImDrawList* dl, float x, float y, const MmSeat& s, int side, bool canSit) {
     const MmPal& P = MmP();
-    const float pw = 130, ph = 190;
+    const float pw = MM_SEAT_W, ph = MM_SEAT_H;
     if (s.port < 0) {
         dl->AddRectFilled(CP(x, y), CP(x + pw, y + ph), MmC(P.bgTop, 0.55f), CV(10));
         dl->AddRect(CP(x, y), CP(x + pw, y + ph), MmC(P.acc, 0.7f), CV(10), 0, CV(2));
         MmText(dl, g_fMenu, 18, x + pw / 2, y + ph / 2 - 14, MmC(P.dim, 0.8f), "FREE", 1);
         MmText(dl, g_fMenu, 18, x + pw / 2, y + ph / 2 + 14, MmC(P.dim, 0.8f), "SEAT", 1);
-        if (canSit) MmText(dl, g_fUi, 23, x + pw / 2, y + ph + 26, MmC(P.gold), "Sit here", 1);
+        if (canSit) MmText(dl, g_fUi, 23, x + pw / 2, y + ph + 24, MmC(P.gold), "Sit here", 1);
         return;
     }
     MmImg(dl, "MA10_CSEL", s.port, x, y, pw, ph);
@@ -214,11 +215,11 @@ static void MmSeatDraw(ImDrawList* dl, float x, float y, const MmSeat& s, int si
     dl->AddRect(CP(bx, by), CP(bx + 54, by + 28), MmC(P.text), CV(5), 0, CV(1.5f));
     MmText(dl, g_fMenu, 13, bx + 27, by + 14, MmC(side == 1 ? P.text : P.ink), side == 1 ? "1P" : "2P", 1, 0, 0, 0.5f);
     bool you = !strcmp(s.name, "You");
-    MmText(dl, g_fUiBold, 25, x + pw / 2 + 1, y + ph + 23, MmRGBA(0, 0, 0, 0.6f), s.name, 1);
-    MmText(dl, g_fUiBold, 25, x + pw / 2, y + ph + 22, you ? MmC(P.gold) : MmC(P.text), s.name, 1);
+    MmText(dl, g_fUiBold, 25, x + pw / 2 + 1, y + ph + 21, MmRGBA(0, 0, 0, 0.6f), s.name, 1);
+    MmText(dl, g_fUiBold, 25, x + pw / 2, y + ph + 20, you ? MmC(P.gold) : MmC(P.text), s.name, 1);
     if (s.pill) {
         bool ready = !strcmp(s.pill, "READY"), play = !strcmp(s.pill, "PLAY");
-        MmPill(dl, x + pw / 2, y + ph + 58, 120, 30, s.pill, ready ? P.gold : play ? P.acc : P.dim, ready || play);
+        MmPill(dl, x + pw / 2, y + ph + 52, 112, 28, s.pill, ready ? P.gold : play ? P.acc : P.dim, ready || play);
     }
 }
 
@@ -343,10 +344,10 @@ static void MmCreateFrame() {
                             "2 to 8 players. Two players share a table, so 8 players means 4 tables.",
                             "Rounds needed to win a game.", "Time limit of each round, in seconds.",
                             "How many games two players play before both go back to the room."};
-    if (g_crSel < 6) MmText(dl, g_fUi, 24, (X0 + X1) / 2, Y0 + 40 + RH * 6 + 60, MmC(P.dim, in), hints[g_crSel], 1);
+    if (g_crSel < 6) MmText(dl, g_fUi, 24, (X0 + X1) / 2, Y0 + 40 + RH * 6 + 64, MmC(P.dim, in), hints[g_crSel], 1);
     // CREATE button
     {
-        float bx0 = 810, bx1 = 1110, by0 = 830, by1 = 900;
+        float bx0 = 810, bx1 = 1110, by0 = 864, by1 = 932;
         if (MmHover(bx0, by0, bx1, by1) && g_crSel != 6 && (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0)) { g_crSel = 6; MM_SND |= 1; }
         if (MmClicked(bx0, by0, bx1, by1)) create = true;
         if (g_crSel == 6) MmImg(dl, "MA10_CMN", 83, bx0 - 80, by0 - 20, bx1 - bx0 + 160, by1 - by0 + 40, MmGlowCol(P.glow, 0.5f * in), ImVec2(0, 0), ImVec2(1, 1), true);
@@ -362,11 +363,11 @@ static void MmCreateFrame() {
             MM.screen = 1; MM.roomT = -1;
         }
     }
-    MmPadButton(dl, 50, 1004, 'A', MmRGBA(40, 160, 70));
-    MmText(dl, g_fMenu, 13, 94, 1022, MmC(P.text), "Select");
-    MmPadButton(dl, 200, 1004, 'B', MmRGBA(190, 40, 40));
-    MmText(dl, g_fMenu, 13, 244, 1022, MmC(P.text), "Back");
-    MmText(dl, g_fUi, 20, 340, 1022, MmC(P.faint), "Left / right changes a setting");
+    MmPadButton(dl, 60, 1004, 'A', MmRGBA(40, 160, 70));
+    MmText(dl, g_fMenu, 13, 104, 1022, MmC(P.text), "Select");
+    MmPadButton(dl, 210, 1004, 'B', MmRGBA(190, 40, 40));
+    MmText(dl, g_fMenu, 13, 254, 1022, MmC(P.text), "Back");
+    MmText(dl, g_fUi, 20, 360, 1022, MmC(P.faint), "Left / right changes a setting");
     MmNoteDraw(dl, T.now, 560, 960);
     MmPageEnd(dl);
 }
@@ -416,12 +417,17 @@ static void MmSearchFrame() {
     ImDrawList* dl = MmPageBegin("##search", T.tm, T.pulse);
     float in = MmEase(T, 0, 0.5f);
     MmPageTitle(dl, "MAIN MENU", "ROOM SEARCH", in);
-    MmPadButton(dl, 1640, 56, 'Y', MmRGBA(210, 170, 20, in));
-    MmText(dl, g_fMenu, 18, 1686, 74, MmC(P.text, in), "REFRESH");
-    if (MmClicked(1630, 46, 1880, 100)) { net::RoomSearch(); g_srLast = T.now; }
-    MmPadButton(dl, 1240, 56, 'X', MmRGBA(40, 100, 200, in));   // build 114
-    MmText(dl, g_fMenu, 18, 1286, 74, MmC(P.text, in), "JOIN WITH CODE");
-    if (MmClicked(1230, 46, 1600, 100)) { g_codeOpen = true; g_codeFocus = true; g_codeIn[0] = 0; MM_SND |= 2; }
+    // build 120h: both prompts end at the page's right margin (1860, like the title's 60 on the left)
+    ImFont* hf = g_fMenu ? g_fMenu : ImGui::GetFont();
+    float rw = hf->CalcTextSizeA(CV(18 * MmEm(g_fMenu)), FLT_MAX, 0.0f, "REFRESH").x / g_cv;
+    float jw = hf->CalcTextSizeA(CV(18 * MmEm(g_fMenu)), FLT_MAX, 0.0f, "JOIN WITH CODE").x / g_cv;
+    float yx = 1860 - rw - 46, xx = yx - 60 - jw - 46;
+    MmPadButton(dl, yx, 56, 'Y', MmRGBA(210, 170, 20, in));
+    MmText(dl, g_fMenu, 18, yx + 46, 74, MmC(P.text, in), "REFRESH");
+    if (MmClicked(yx - 10, 46, 1880, 100)) { net::RoomSearch(); g_srLast = T.now; }
+    MmPadButton(dl, xx, 56, 'X', MmRGBA(40, 100, 200, in));   // build 114
+    MmText(dl, g_fMenu, 18, xx + 46, 74, MmC(P.text, in), "JOIN WITH CODE");
+    if (MmClicked(xx - 10, 46, yx - 20, 100)) { g_codeOpen = true; g_codeFocus = true; g_codeIn[0] = 0; MM_SND |= 2; }
     const float X0 = 360, X1 = 1560, Y0 = 190, RH = 74;
     float listBottom = 930;
     MmSection(dl, X0, Y0, X1, listBottom, "PUBLIC ROOMS", in);
@@ -466,10 +472,10 @@ static void MmSearchFrame() {
         MM.screen = 1; MM.roomT = -1;
     }
     MmText(dl, g_fUi, 22, (X0 + X1) / 2, 966, MmC(P.faint, in), "Only rooms of this build of the mod are shown. Private rooms: X and the room code, or a Steam invite.", 1);
-    MmPadButton(dl, 50, 1004, 'A', MmRGBA(40, 160, 70));
-    MmText(dl, g_fMenu, 13, 94, 1022, MmC(P.text), "Join");
-    MmPadButton(dl, 180, 1004, 'B', MmRGBA(190, 40, 40));
-    MmText(dl, g_fMenu, 13, 224, 1022, MmC(P.text), "Back");
+    MmPadButton(dl, 60, 1004, 'A', MmRGBA(40, 160, 70));
+    MmText(dl, g_fMenu, 13, 104, 1022, MmC(P.text), "Join");
+    MmPadButton(dl, 210, 1004, 'B', MmRGBA(190, 40, 40));
+    MmText(dl, g_fMenu, 13, 254, 1022, MmC(P.text), "Back");
     MmNoteDraw(dl, T.now, 360, 1022);
     MmPageEnd(dl);
 }
@@ -533,8 +539,8 @@ static void MmRoomFrame() {
             MmText(dl, g_fMenu, 22, 960, 480, MmC(P.text), R.err[0] ? R.err : "You are not in a room", 1);
             MmText(dl, g_fUi, 24, 960, 540, MmC(P.dim), "Press A or B to go back to the main menu.", 1);
         }
-        MmPadButton(dl, 50, 1004, 'B', MmRGBA(190, 40, 40));
-        MmText(dl, g_fMenu, 13, 94, 1022, MmC(P.text), busy ? "Cancel" : "Back");
+        MmPadButton(dl, 60, 1004, 'B', MmRGBA(190, 40, 40));
+        MmText(dl, g_fMenu, 13, 104, 1022, MmC(P.text), busy ? "Cancel" : "Back");
         MmPageEnd(dl);
         return;
     }
@@ -597,23 +603,26 @@ static void MmRoomFrame() {
         MmText(dl, g_fMenu, 15, px + 120, 74, MmC(P.dim, in), "PLAYERS");
         char nb[8];
         snprintf(nb, sizeof nb, "%d", R.nMembers);
-        float nw = MmText(dl, g_fMenu, 34, px + 240, 74, MmC(P.gold, in), nb, 0, 2, MmC(P.ink, in));
+        float nw = MmText(dl, g_fMenu, 26, px + 240, 74, MmC(P.gold, in), nb, 0, 2, MmC(P.ink, in));
         char lb[8];
         snprintf(lb, sizeof lb, "/ %d", R.set.size);
-        MmText(dl, g_fMenu, 22, px + 250 + nw, 80, MmC(P.dim, in), lb);
+        MmText(dl, g_fMenu, 26, px + 252 + nw, 74, MmC(P.dim, in), lb);
         if (R.code[0]) {   // build 114: the private room's code
             float cx = px + 420;
             MmText(dl, g_fMenu, 15, cx, 74, MmC(P.dim, in), "CODE");
             MmText(dl, g_fMenu, 30, cx + 80, 74, MmC(P.gold, in), R.code, 0, 2, MmC(P.ink, in));
         }
-        MmPadButton(dl, 1600, 56, 'B', MmRGBA(190, 40, 40, in));
+        // build 120h: right-aligned to the page margin (the chat panel's right edge)
+        float lw = (g_fMenu ? g_fMenu : ImGui::GetFont())->CalcTextSizeA(CV(18 * MmEm(g_fMenu)), FLT_MAX, 0.0f, "LEAVE ROOM").x / g_cv;
+        float lx = 1870 - lw, bxl = lx - 46;
+        MmPadButton(dl, bxl, 56, 'B', MmRGBA(190, 40, 40, in));
         if (hold > 0.15f) {   // how long B has been held
-            dl->PathArcTo(CP(1618, 74), CV(24), -IM_PI / 2, -IM_PI / 2 + IM_PI * 2 * ImMin(hold, 1.0f), 32);
+            dl->PathArcTo(CP(bxl + 18, 74), CV(24), -IM_PI / 2, -IM_PI / 2 + IM_PI * 2 * ImMin(hold, 1.0f), 32);
             dl->PathStroke(MmC(P.gold), false, CV(4));
         }
-        MmText(dl, g_fMenu, 12, 1646, 62, MmC(P.faint, in), "HOLD TO");
-        MmText(dl, g_fMenu, 18, 1646, 86, MmRGBA(255, 150, 130, in), "LEAVE ROOM");
-        if (MmClicked(1590, 46, 1890, 100)) { net::RoomLeave(); MM_SND |= 4; MmPageEnd(dl); MmGoMenu(); return; }
+        MmText(dl, g_fMenu, 12, lx, 62, MmC(P.faint, in), "HOLD TO");
+        MmText(dl, g_fMenu, 18, lx, 86, MmRGBA(255, 150, 130, in), "LEAVE ROOM");
+        if (MmClicked(bxl - 10, 46, 1890, 100)) { net::RoomLeave(); MM_SND |= 4; MmPageEnd(dl); MmGoMenu(); return; }
         dl->PushClipRect(ImVec2(0, 0), g_disp, false);
         MmLine(dl, -g_cvO.x / g_cv, 118, g_disp.x / g_cv, 3, MmC(P.acc, 0.95f * in));
         MmLine(dl, -g_cvO.x / g_cv, 122, g_disp.x / g_cv, 1, MmC(P.gold, 0.6f * in));
@@ -624,7 +633,7 @@ static void MmRoomFrame() {
     const float LX0 = 50, LX1 = 470;
     {
         float in = ease(0.1f, 0.5f), ox = (1 - in) * -40;
-        MmSection(dl, LX0 + ox, 176, LX1 + ox, 452, "ROOM SETTINGS", in);
+        MmSection(dl, LX0 + ox, 176, LX1 + ox, 460, "ROOM SETTINGS", in);
         char v[5][48];
         snprintf(v[0], 48, "%d", R.set.rounds);
         snprintf(v[1], 48, "%s", MM_TIMER_NAMES[R.set.timer & 3]);
@@ -637,7 +646,7 @@ static void MmRoomFrame() {
         net::RoomSettings ch = R.set;
         bool changed = false;
         for (int i = 0; i < 5; i++) {
-            float y = 210 + i * 46;
+            float y = 214 + i * 44;
             bool can = isHost && i < 4;
             bool hov = can && MmHover(LX0 + 10, y - 22, LX1 - 10, y + 22);
             if (hov) MmImg(dl, "MA10_CMN", 83, LX0 + 8 + ox, y - 22, LX1 - LX0 - 16, 44, MmGlowCol(P.glow, 0.30f * in), ImVec2(0, 0), ImVec2(1, 1), true);
@@ -654,13 +663,14 @@ static void MmRoomFrame() {
             }
         }
         if (changed) { net::RoomChange(ch); MM_SND |= 1; }
-        MmText(dl, g_fUi, 19, LX0 + 24 + ox, 430, MmC(P.faint, in), isHost ? "You are the host: click a setting or a player" : "Only the host can change these");
+        MmText(dl, g_fUi, 19, LX0 + 24 + ox, 426, MmC(P.faint, in), isHost ? "You are the host: click a setting or a player" : "Only the host can change these");
 
-        MmSection(dl, LX0 + ox, 506, LX1 + ox, 962, "PLAYERS", in);
-        for (int k = 0; k < R.nMembers && k < 7; k++) {
+        MmSection(dl, LX0 + ox, 514, LX1 + ox, 940, "PLAYERS", in);
+        int shown = R.nMembers > 7 ? 6 : R.nMembers;   // build 120h: 7 rows; with 8 players the 7th says "+ 2 more"
+        for (int k = 0; k < shown; k++) {
             const net::RoomMember& m = R.members[k];
-            float y = 546 + k * 54;
-            if (m.me) MmImg(dl, "MA10_CMN", 83, LX0 + 8 + ox, y - 26, LX1 - LX0 - 16, 52, MmGlowCol(P.glow, 0.40f * in), ImVec2(0, 0), ImVec2(1, 1), true);
+            float y = 550 + k * 48;
+            if (m.me) MmImg(dl, "MA10_CMN", 83, LX0 + 8 + ox, y - 24, LX1 - LX0 - 16, 48, MmGlowCol(P.glow, 0.40f * in), ImVec2(0, 0), ImVec2(1, 1), true);
             float w = MmText(dl, g_fUiBold, 27, LX0 + 30 + ox, y, m.me ? MmC(P.gold, in) : MmC(P.text, in), m.name);
             if (m.host) MmPill(dl, LX0 + 30 + w + 42 + ox, y, 64, 24, "HOST", P.gold, false, in);
             char where[24];   // build 112
@@ -670,7 +680,7 @@ static void MmRoomFrame() {
         static uint64_t kickArm = 0;
         static double kickAt = 0;
         bool canKick = isHost && !m.me && !m.standin && !g_invOpen;
-        bool hovK = canKick && MmHover(LX0 + 10, y - 26, LX1 - 10, y + 26);
+        bool hovK = canKick && MmHover(LX0 + 10, y - 24, LX1 - 10, y + 24);
         bool armed = kickArm == m.id && T.now - kickAt < 3.0;
         if (hovK && io.MouseClicked[0]) {
             if (armed) { net::RoomKick(m.id); kickArm = 0; MM_SND |= 4; }
@@ -680,15 +690,16 @@ static void MmRoomFrame() {
         else if (hovK) MmPill(dl, LX1 - 70 + ox, y, 96, 26, "KICK", MmRgb{230, 70, 60}, false, in);
         else MmText(dl, g_fMenu, 12, LX1 - 24 + ox, y, m.seat >= 0 ? MmC(P.dim, in) : MmC(P.faint, in), where, 2);
         }
-        if (R.nMembers > 7) { char s[32]; snprintf(s, sizeof s, "+ %d more", R.nMembers - 7); MmText(dl, g_fUi, 20, LX0 + 30 + ox, 920, MmC(P.dim, in), s); }
-        MmPadButton(dl, LX0 + 20 + ox, 912, 'X', MmRGBA(40, 100, 200, in));
-        MmText(dl, g_fMenu, 14, LX0 + 66 + ox, 930, MmC(P.text, in), "Invite friends");
-        MmText(dl, g_fMenu, 12, LX1 - 24 + ox, 930, MmC(P.faint, in), "STEAM", 2);
-        if (MmClicked(LX0 + 10, 900, LX1 - 10, 960)) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
+        if (R.nMembers > 7) { char s[32]; snprintf(s, sizeof s, "+ %d more", R.nMembers - 6); MmText(dl, g_fUi, 22, LX0 + 30 + ox, 550 + 6 * 48, MmC(P.dim, in), s); }
+        MmLine(dl, LX0 + 20 + ox, 864, LX1 - LX0 - 40, 1, MmC(P.acc, 0.5f * in));
+        MmPadButton(dl, LX0 + 24 + ox, 884, 'X', MmRGBA(40, 100, 200, in));
+        MmText(dl, g_fMenu, 14, LX0 + 70 + ox, 902, MmC(P.text, in), "Invite friends");
+        MmText(dl, g_fMenu, 12, LX1 - 24 + ox, 902, MmC(P.faint, in), "STEAM", 2);
+        if (MmClicked(LX0 + 10, 870, LX1 - 10, 936)) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
     }
 
     // ---- centre: tables (build 112: real seats) ----
-    const float TX0 = 500, TY0 = 168, TW = 455, TH = 350, GAP = 18;
+    const float TX0 = 500, TY0 = 176, TW = 451, TH = 338, GAP = 18;   // build 120h: tops and bottoms line up with the side panels
     for (int ti = 0; ti < 4; ti++) {
         float in = ease(0.15f + 0.07f * ti, 0.5f);
         float x0 = TX0 + (ti % 2) * (TW + GAP), y0 = TY0 + (ti / 2) * (TH + GAP) + (1 - in) * 30, x1 = x0 + TW, y1 = y0 + TH;
@@ -698,27 +709,28 @@ static void MmRoomFrame() {
         dl->AddRectFilled(CP(x0 + 6, y0 + 6), CP(x1 - 6, y1 - 6), MmC(P.panel, 0.88f * a), CV(14));
         MmNine(dl, "MA10_CS_NETWORK", 45, 26, 26, x0, y0, x1, y1, MmRGBA(255, 255, 255, a));
         if (mine) dl->AddRect(CP(x0 + 4, y0 + 4), CP(x1 - 4, y1 - 4), MmC(P.gold, 0.8f * in), CV(12), 0, CV(2.5f));
-        ImVec2 c = CP(x0 + 40, y0 + 40);
+        ImVec2 c = CP(x0 + 48, y0 + 46);
         dl->AddCircleFilled(c, CV(20), MmC(P.acc, a), 32);
         dl->AddCircle(c, CV(20), MmC(P.text, a), 32, CV(2));
         char L[2] = {(char)('A' + ti), 0};
-        MmText(dl, g_fMenu, 18, x0 + 40, y0 + 40, MmC(P.text, a), L, 1, 0, 0, 0.5f);
+        MmText(dl, g_fMenu, 18, x0 + 48, y0 + 46, MmC(P.text, a), L, 1, 0, 0, 0.5f);
         char nm[16];
         snprintf(nm, sizeof nm, "TABLE %c", 'A' + ti);
-        MmText(dl, g_fMenu, 20, x0 + 74, y0 + 40, MmC(P.text, a), nm, 0, 1, MmC(P.ink, a));
-        if (!used) { MmText(dl, g_fUi, 20, (x0 + x1) / 2, y0 + 200, MmC(P.faint, a), "Not used at this room size", 1); continue; }
+        MmText(dl, g_fMenu, 20, x0 + 82, y0 + 46, MmC(P.text, a), nm, 0, 1, MmC(P.ink, a));
+        if (!used) { MmText(dl, g_fUi, 20, (x0 + x1) / 2, y0 + TH / 2 + 12, MmC(P.faint, a), "Not used at this room size", 1); continue; }
         const net::RoomMember* sm[2] = {MmSeatOwner(R, ti * 2), MmSeatOwner(R, ti * 2 + 1)};
         bool playing = sm[0] && sm[1] && (sm[0]->playing || sm[1]->playing);
         bool canSit = RmViewState() != 2;
-        float sx[2] = {x0 + 30, x1 - 160}, sy = y0 + 74;
+        const float pw = MM_SEAT_W, ph = MM_SEAT_H;
+        float sx[2] = {x0 + 28, x1 - 28 - pw}, sy = y0 + 78;
         for (int k = 0; k < 2; k++) {
             int seat = ti * 2 + k;
             // the cursor (glow behind the seat) and the mouse
-            bool hov = MmHover(sx[k] - 10, sy - 14, sx[k] + 140, sy + 250);
+            bool hov = MmHover(sx[k] - 10, sy - 14, sx[k] + pw + 10, sy + ph + 68);
             if (hov && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) && g_seatSel != seat) { g_seatSel = seat; MM_SND |= 1; }
             if (hov && io.MouseClicked[0] && !g_invOpen) { g_seatSel = seat; MmSeatPress(R, seat); }
             if (g_seatSel == seat && !g_invOpen)
-                MmImg(dl, "MA10_CMN", 39, sx[k] - 50, sy - 50, 230, 330, MmGlowCol(P.glow, (0.45f + 0.2f * T.pulse) * in), ImVec2(0, 0), ImVec2(1, 1), true);
+                MmImg(dl, "MA10_CMN", 39, sx[k] - 50, sy - 50, pw + 100, ph + 140, MmGlowCol(P.glow, (0.45f + 0.2f * T.pulse) * in), ImVec2(0, 0), ImVec2(1, 1), true);
             const net::RoomMember* m = sm[k];
             MmSeat st{-1, "", nullptr};
             if (m) {
@@ -726,12 +738,12 @@ static void MmRoomFrame() {
                 st.name = m->me ? "You" : m->name;
                 st.pill = playing ? "PLAY" : m->ready ? "READY" : "WAIT";
             }
-            if (g_seatSel == seat && !g_invOpen) dl->AddRect(CP(sx[k] - 4, sy - 4), CP(sx[k] + 134, sy + 194), MmC(P.gold, in), CV(10), 0, CV(3));
+            if (g_seatSel == seat && !g_invOpen) dl->AddRect(CP(sx[k] - 4, sy - 4), CP(sx[k] + pw + 4, sy + ph + 4), MmC(P.gold, in), CV(10), 0, CV(3));
             MmSeatDraw(dl, sx[k], sy, st, k + 1, canSit && !m);   // (build 114: over the cursor, so the badge stays on top)
         }
         float cx = (x0 + x1) / 2;
         bool both = sm[0] && sm[1];
-        MmImg(dl, "MA10_CS_NETWORK", 149, cx - 44, y0 + 108, 88, 58, MmRGBA(255, 255, 255, (both ? 1.0f : 0.35f) * in));
+        MmImg(dl, "MA10_CS_NETWORK", 149, cx - 44, y0 + 116, 88, 58, MmRGBA(255, 255, 255, (both ? 1.0f : 0.35f) * in));
         if (!sm[0] && !sm[1]) {
             MmText(dl, g_fMenu, 16, cx, y0 + 230, MmC(P.faint, in), "OPEN", 1);
         } else if (!both) {
@@ -774,20 +786,20 @@ static void MmRoomFrame() {
     // ---- bottom centre: my match settings (My setup; Y edits it) ----
     {
         float in = ease(0.4f, 0.5f), oy = (1 - in) * 30;
-        float x0 = TX0, x1 = TX0 + 2 * TW + GAP, y0 = 922 + oy, y1 = 1050 + oy;
+        float x0 = TX0, x1 = TX0 + 2 * TW + GAP, y0 = 908 + oy, y1 = 1036 + oy;
         MmSection(dl, x0, y0, x1, y1, "MY MATCH SETTINGS", in);
         SuRoomPanel(dl, x0, y0, x1, y1, in);
         if (MmClicked(x0, y0, x1, y1)) { MM_SND |= 2; SuOpen(); MmPageEnd(dl); return; }
     }
 
     // ---- right: room chat + buttons ----
-    const float RX0 = 1464, RX1 = 1870;
+    const float RX0 = 1450, RX1 = 1870;   // build 120h: as wide as the left panels, same 30 px gap to the tables
     {
         float in = ease(0.2f, 0.5f), ox = (1 - in) * 40;
         MmSection(dl, RX0 + ox, 176, RX1 + ox, 940, "ROOM CHAT", in);
         // newest at the bottom: lay out from the end until the box is full
         static char lines[6][200];
-        float yb = 846, ytop = 200;
+        float yb = 844, ytop = 206;
         for (int i = R.nChat - 1; i >= 0 && yb > ytop; i--) {
             const net::ChatLine& c = R.chat[i];
             if (c.system) {
@@ -809,16 +821,17 @@ static void MmRoomFrame() {
             g_chatIn[0] = 0;
             g_chatFocus = true;   // stay in the field to keep talking
         } else g_chatFocus = false;
+        const float BM = (RX0 + RX1) / 2;   // two equal buttons, 16 apart
         if (seated) {   // build 112
-            MmButton(dl, RX0 + ox, 972, RX0 + 196 + ox, 1036, R.myReady ? "NOT READY" : "READY", !R.myReady, T.pulse);
-            MmButton(dl, RX0 + 212 + ox, 972, RX1 + ox, 1036, "STAND UP", false, T.pulse);
-            if (MmClicked(RX0, 972, RX0 + 196, 1036)) MmSeatPress(R, R.mySeat);
-            if (MmClicked(RX0 + 212, 972, RX1, 1036) && RmViewState() != 2) { net::RoomSit(-1); MM_SND |= 4; }
+            MmButton(dl, RX0 + ox, 972, BM - 8 + ox, 1036, R.myReady ? "NOT READY" : "READY", !R.myReady, T.pulse);
+            MmButton(dl, BM + 8 + ox, 972, RX1 + ox, 1036, "STAND UP", false, T.pulse);
+            if (MmClicked(RX0, 972, BM - 8, 1036)) MmSeatPress(R, R.mySeat);
+            if (MmClicked(BM + 8, 972, RX1, 1036) && RmViewState() != 2) { net::RoomSit(-1); MM_SND |= 4; }
         } else {
-            MmButton(dl, RX0 + ox, 972, RX0 + 196 + ox, 1036, "INVITE", true, T.pulse);
-            MmButton(dl, RX0 + 212 + ox, 972, RX1 + ox, 1036, "LEAVE", false, T.pulse);
-            if (MmClicked(RX0, 972, RX0 + 196, 1036)) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
-            if (MmClicked(RX0 + 212, 972, RX1, 1036)) { net::RoomLeave(); MM_SND |= 4; MmPageEnd(dl); MmGoMenu(); return; }
+            MmButton(dl, RX0 + ox, 972, BM - 8 + ox, 1036, "INVITE", true, T.pulse);
+            MmButton(dl, BM + 8 + ox, 972, RX1 + ox, 1036, "LEAVE", false, T.pulse);
+            if (MmClicked(RX0, 972, BM - 8, 1036)) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
+            if (MmClicked(BM + 8, 972, RX1, 1036)) { net::RoomLeave(); MM_SND |= 4; MmPageEnd(dl); MmGoMenu(); return; }
         }
     }
 
@@ -827,12 +840,12 @@ static void MmRoomFrame() {
         const net::RoomMember* o = MmSeatOwner(R, g_seatSel);
         const char* aText = g_seatSel == R.mySeat ? (R.myReady ? "Not ready" : "Ready") : o ? "" : seated ? "Move" : "Sit";
         float x = 50;
-        if (aText[0]) { MmPadButton(dl, x, 1004, 'A', MmRGBA(40, 160, 70)); MmText(dl, g_fMenu, 13, x + 44, 1022, MmC(P.text), aText); x += 150; }
-        MmPadButton(dl, x, 1004, 'B', MmRGBA(190, 40, 40));
-        MmText(dl, g_fMenu, 13, x + 44, 1022, MmC(P.text), seated ? "Stand up" : "Hold: leave");
-        MmText(dl, g_fUi, 18, 50, 1056, MmC(P.faint), "X Invite   Y My setup   Tab Chat");
+        if (aText[0]) { MmPadButton(dl, x, 984, 'A', MmRGBA(40, 160, 70)); MmText(dl, g_fMenu, 13, x + 44, 1002, MmC(P.text), aText); x += 150; }
+        MmPadButton(dl, x, 984, 'B', MmRGBA(190, 40, 40));
+        MmText(dl, g_fMenu, 13, x + 44, 1002, MmC(P.text), seated ? "Stand up" : "Hold: leave");
+        MmText(dl, g_fUi, 19, 50, 1040, MmC(P.faint), "X Invite   Y My setup   Tab Chat");
     }
-    MmNoteDraw(dl, T.now, 50, 970);
+    MmNoteDraw(dl, T.now, 50, 960);
 
     // ---- invite friends panel ----
     if (g_invOpen) {

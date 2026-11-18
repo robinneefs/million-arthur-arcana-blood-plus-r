@@ -474,7 +474,7 @@ static void MmSettingsFrame() {
         MmText(dl, g_fMenu, 13, cC, Y0 + 46, MmC(P.faint), "CONTROLLER", 1);
         MmText(dl, g_fMenu, 13, cK, Y0 + 46, MmC(P.faint), "KEYBOARD", 1);
         for (int i = 0; i < ST_NACT; i++) {
-            float y = Y0 + 104 + i * 62;
+            float y = Y0 + 100 + i * 58;
             for (int c = 0; c < 2; c++) {
                 float cx = c ? cK : cC;
                 if (rowHit(i, cx - 120, y - 30, cx + 120, y + 30, c)) StChange(0);
@@ -509,8 +509,8 @@ static void MmSettingsFrame() {
                 StBadge(dl, cx - bw / 2, y, b);
             }
         }
-        MmLine(dl, lx0 + 20, Y0 + 588, lx1 - lx0 - 40, 1, MmC(P.acc, 0.6f));
-        float y = Y0 + 632;
+        MmLine(dl, lx0 + 20, Y0 + 552, lx1 - lx0 - 40, 1, MmC(P.acc, 0.6f));
+        float y = Y0 + 600;
         bool bc = SR == ST_ROW_CHECK;
         float b0 = lx0 + 20, b1 = lx0 + 460;
         if (rowHit(ST_ROW_CHECK, b0, y - 26, b1, y + 26)) StChange(0);
@@ -519,11 +519,11 @@ static void MmSettingsFrame() {
         dl->AddRect(CP(b0, y - 26), CP(b1, y + 26), MmC(bc ? P.selOut : P.text, 0.9f), CV(6), 0, CV(2));
         MmText(dl, g_fMenu, 18, (b0 + b1) / 2, y, bc ? MmC(P.ink) : MmC(P.text), "BUTTON CHECK", 1);
         MmText(dl, g_fUi, 21, b1 + 40, y, MmC(P.faint), "Press your buttons and see what the game reads");
-        y = Y0 + 706;
+        y = Y0 + 672;
         if (rowHit(ST_ROW_VIB, lx0, y - 34, lx1, y + 34)) StChange(0);
         StRow(dl, lx0, lx1, y, "Vibration", SR == ST_ROW_VIB, T.pulse);
         StToggle(dl, X0 + 400, y, g.vib);
-        MmText(dl, g_fUi, 20, lx0 + 20, Y0 + 760, MmC(P.faint), "Start / Pause is always START (controller). Pressing a shortcut's buttons together also works.");
+        MmText(dl, g_fUi, 20, lx0 + 20, Y0 + 730, MmC(P.faint), "Start / Pause is always START (controller). Pressing a shortcut's buttons together also works.");
     } else if (ST.tab == 1) {
         MmSection(dl, X0, Y0, X1, Y1, "SOUND");
         const char* lab[3] = {"Music", "Sound effects", "Voices"};
@@ -595,9 +595,9 @@ static void MmSettingsFrame() {
         MmText(dl, g_fMenu, 13, X0 + 50, Y0 + 395, MmC(P.faint), "VERSION");
         char v[64];
 #ifndef UI_HARNESS
-        snprintf(v, sizeof v, "Arcana Blood rollback  build %u", (unsigned)NET_BUILD);
+        snprintf(v, sizeof v, "Arcana Blood +R  %s  (build %u)", MOD_VERSION_SHORT, (unsigned)NET_BUILD);
 #else
-        snprintf(v, sizeof v, "Arcana Blood rollback  build 104");
+        snprintf(v, sizeof v, "Arcana Blood +R  %s  (build %d)", MOD_VERSION_SHORT, MOD_BUILD);
 #endif
         MmText(dl, g_fUiBold, 26, X0 + 300, Y0 + 395, MmC(P.text), v);
         MmText(dl, g_fMenu, 13, X0 + 50, Y0 + 445, MmC(P.faint), "GAME");

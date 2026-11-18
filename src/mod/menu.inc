@@ -527,9 +527,9 @@ static void MmMainFrame() {
         ImU32 oc = on ? MmC(P.selOut, a) : MmC(P.ink, a);
         ImU32 iconTint = on ? MmC(P.selFill, a) : MmC(P.text, a);
         if (i < 2) MmImg(dl, "MA10_CS_NETWORK", 62, x, y, 52, 56, iconTint, ImVec2(0, 0), ImVec2(52.0f / 509.0f, 1));
-        else if (i == 2) MmImg(dl, "MA10_CS_OPTION", 22, x, y + 1, 44, 54, iconTint, ImVec2(0, 0), ImVec2(44.0f / 520.0f, 1));
+        else if (i == 2) MmImg(dl, "MA10_CS_OPTION", 22, x + 4, y + 1, 44, 54, iconTint, ImVec2(0, 0), ImVec2(44.0f / 520.0f, 1));
         else MmRoundIcon(dl, x, y, i == 3 ? '?' : 'p', iconTint, on ? MmC(P.selOut, a) : MmC(P.light ? P.ink : P.bgBot, a));
-        float tx = x + (i == 2 ? 52 : 60);
+        float tx = x + 64;   // build 120h: same start for every entry
         MmText(dl, g_fMenu, 31, tx, y + 28, oc, MM_ITEMS[i], 0, 4, oc);
         MmText(dl, g_fMenu, 31, tx, y + 28, fill, MM_ITEMS[i], 0, 0, 0, 1);
     }
@@ -579,9 +579,9 @@ static void MmMainFrame() {
         MmNine(dl, "MA10_CS_NETWORK", 45, 26, 26, x0, y0, x1, y1, MmRGBA(255, 255, 255, in));
         MmText(dl, g_fMenu, 19, x0 + 26, y0 + 34, MmC(P.text, in), "MY SETUP", 0, 1, MmC(P.ink, in));
         SuPanel(dl, x0, y0, in);   // build 102: the saved setup
-        MmLine(dl, x0 + 24, y1 - 56, x1 - x0 - 48, 2, MmC(P.acc, 0.6f * in));
-        MmPadButton(dl, x0 + 24, y1 - 46, 'Y', MmRGBA(210, 170, 20, in));
-        MmText(dl, g_fMenu, 15, x0 + 70, y1 - 28, MmC(P.text, in), "Edit setup");
+        MmLine(dl, x0 + 24, y1 - 62, x1 - x0 - 48, 2, MmC(P.acc, 0.6f * in));
+        MmPadButton(dl, x0 + 24, y1 - 49, 'Y', MmRGBA(210, 170, 20, in));
+        MmText(dl, g_fMenu, 15, x0 + 70, y1 - 31, MmC(P.text, in), "Edit setup");
         if (MM.screen == 0 && ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(x0, y0), CP(x1, y1), false)) { MM_SND |= 2; SuOpen(); }
     }
 
@@ -593,7 +593,7 @@ static void MmMainFrame() {
         char t[112];
         snprintf(t, sizeof t, "UPDATE AVAILABLE: V%s  -  CLOSE THE GAME AND OPEN THE LAUNCHER TO UPDATE", nv);
         for (char* c = t; *c; c++) *c = (char)toupper((unsigned char)*c);
-        MmText(dl, g_fMenu, 13, 1870, 1012, MmC(P.gold), t, 2);
+        MmText(dl, g_fMenu, 13, 830, 1040, MmC(P.gold), t, 1);   // build 120h: bottom row, clear of the My setup card
     }
 
     dl->PopClipRect();

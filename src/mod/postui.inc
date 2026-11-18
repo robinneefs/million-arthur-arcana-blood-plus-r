@@ -32,7 +32,7 @@ static float PmEase(float t, float start, float len) {
 // one player's card; side 0 left, 1 right (mirrored)
 static void PmCard(ImDrawList* dl, const PmView& v, int side, float in, float now) {
     const MmPal& P = MmP();
-    const float W = 723, H = 456, Y0 = 318;
+    const float W = 723, H = 416, Y0 = 318;   // build 120h: was 456 (more space under WINS than above PLAYER)
     float x0 = side == 0 ? 120 - (1 - in) * 80 : 1080 + (1 - in) * 80, y0 = Y0, x1 = x0 + W, y1 = y0 + H;
     bool won = v.winner == side;
     // panel: dark fill, gold frame (same nine-slice as the My setup panel), soft glow behind the winner's
