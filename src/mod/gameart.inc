@@ -182,12 +182,27 @@ static bool ReadRange(const wchar_t* path, uint32_t off, uint32_t n, std::vector
     return ok;
 }
 // a box around the head: the top of the figure, centred on where its pixels are
-template <class F> static void HeadBox(int w, int h, F solid, float out[4]) {
+// Build 120f: where each character's face is in its standing picture (pixels: x from the left,
+// y from the top of the figure), measured by hand from the game's pictures; the colour squares
+// are centred on it. Characters not listed use the guess below.
+static const short FACE_XY[14][2] = {{352, 115}, {494, 117}, {213, 123}, {475, 90}, {318, 122}, {305, 110}, {237, 65},
+                                     {598, 69}, {243, 182}, {228, 87}, {340, 80}, {228, 150}, {300, 60}, {218, 72}};
+template <class F> static void HeadBox(int w, int h, F solid, float out[4], int id = -1) {
     int x0 = w, y0 = h, x1 = -1, y1 = -1;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++)
             if (solid(x, y)) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
     if (x1 < 0) { out[0] = out[1] = 0; out[2] = out[3] = 1; return; }
+    if (id >= 0 && id < 14 && FACE_XY[id][0] < w) {
+        const float bh = 150, bw = bh * 56.0f / 64.0f;
+        float l = FACE_XY[id][0] - bw / 2, t = y0 + FACE_XY[id][1] - bh / 2;
+        if (l < 0) l = 0;
+        if (l + bw > w) l = w - bw;
+        if (t < 0) t = 0;
+        if (t + bh > h) t = h - bh;
+        out[0] = l / w; out[1] = t / h; out[2] = (l + bw) / w; out[3] = (t + bh) / h;
+        return;
+    }
     float bh = (float)(y1 - y0 + 1), hb = bh * 0.24f;
     double sx = 0; int n = 0;
     for (int y = y0; y < y0 + (int)hb && y < h; y++)
@@ -230,7 +245,7 @@ static void LoadChara(int id) {
     c.w = w; c.h = h;
     const uint8_t* p0 = c.pal.data();
     const uint8_t* ix = c.idx.data();
-    HeadBox(w, h, [&](int x, int y) { return p0[ix[(size_t)y * w + x] * 4 + 3] > 0x20; }, c.head);
+    HeadBox(w, h, [&](int x, int y) { return p0[ix[(size_t)y * w + x] * 4 + 3] > 0x20; }, c.head, id);
     c.state = 2;
     LeaveCriticalSection(&g_lock);
     Log("art: fight sprite of character %02X loaded (%dx%d)", id, w, h);
