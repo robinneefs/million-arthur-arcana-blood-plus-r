@@ -14,8 +14,8 @@ BEGIN
       VALUE "CompanyName", "GGenie (fan-made, open source)"
       VALUE "FileDescription", "Arcana Blood +R launcher (updates the mod and starts the game with it)"
       VALUE "FileVersion", MOD_VERSION
-      VALUE "InternalName", "arcana_launcher"
-      VALUE "OriginalFilename", "arcana_launcher.exe"
+      VALUE "InternalName", "Arcana Blood +R"
+      VALUE "OriginalFilename", "Arcana Blood +R.exe"
       VALUE "ProductName", "Arcana Blood +R"
       VALUE "ProductVersion", MOD_VERSION
       VALUE "LegalCopyright", "MIT licence. github.com/robinneefs/million-arthur-arcana-blood-plus-r"

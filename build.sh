@@ -25,9 +25,9 @@ $CXX -O2 -Wall -static -static-libgcc -shared -o build/dinput8.dll src/loader/di
 cp build/dinput8.dll build/ArcanaPlusR/
 # the launcher
 $RES src/launcher/launcher.rc -O coff -o build/res/launcher_res.o
-$CXX $FLAGS $IMGUI -Wall -municode -mwindows -o build/ArcanaPlusR/arcana_launcher.exe src/launcher/launcher.cpp \
+$CXX $FLAGS $IMGUI -Wall -municode -mwindows -o "build/ArcanaPlusR/Arcana Blood +R.exe" src/launcher/launcher.cpp \
   build/obj/*.o build/res/launcher_res.o -ld3d9 -lwinhttp -lbcrypt -lversion -lole32 -lwindowscodecs -lshell32 -luuid -lgdi32 -ldwmapi
-i686-w64-mingw32-strip build/ArcanaPlusR/arcana_rollback.dll build/ArcanaPlusR/dinput8.dll build/ArcanaPlusR/arcana_launcher.exe
+i686-w64-mingw32-strip build/ArcanaPlusR/arcana_rollback.dll build/ArcanaPlusR/dinput8.dll "build/ArcanaPlusR/Arcana Blood +R.exe"
 cp config/rollback.ini assets/rollback_logo.png build/ArcanaPlusR/
 cp fonts/* build/ArcanaPlusR/fonts/
 ls -la build build/ArcanaPlusR

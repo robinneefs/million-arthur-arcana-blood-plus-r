@@ -21,6 +21,7 @@ Unicode true
 !endif
 !define APPNAME "Arcana Blood +R"
 !define GAMEEXE "Million Arthur.exe"
+!define LAUNCHER "${APPNAME}.exe"   ; build 120i: was arcana_launcher.exe
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArcanaBloodPlusR"
 !define REGKEY "Software\ArcanaBloodPlusR"
 
@@ -44,7 +45,7 @@ VIAddVersionKey "LegalCopyright" "MIT licence. github.com/robinneefs/million-art
 !define MUI_UNICON "${ICON}"
 !define MUI_WELCOMEPAGE_TITLE "${APPNAME} ${VERSION}"
 !define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME}, a fan-made rollback netcode mod for the Steam version of Million Arthur: Arcana Blood.$\r$\n$\r$\nStart it with the ${APPNAME} shortcut: the launcher keeps the mod up to date and starts the game with it. It puts one small file (dinput8.dll) into the game's folder, which does nothing when you start the game from Steam. No game file is changed.$\r$\n$\r$\nThis is a BETA: problems are expected."
-!define MUI_FINISHPAGE_RUN "$INSTDIR\arcana_launcher.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${LAUNCHER}"
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${APPNAME} now"
 !define MUI_COMPONENTSPAGE_NODESC
 
@@ -68,9 +69,9 @@ Section "${APPNAME} (required)" SecMain
     MessageBox MB_OK|MB_ICONEXCLAMATION "Please close the ${APPNAME} launcher first, then press OK."
   ${EndIf}
   ClearErrors
-  File "${SRC}\arcana_launcher.exe"
+  File "${SRC}\${LAUNCHER}"
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "Could not write arcana_launcher.exe (is the launcher or the game still open?). Close them and run the installer again."
+    MessageBox MB_OK|MB_ICONSTOP "Could not write ${LAUNCHER} (is the launcher or the game still open?). Close them and run the installer again."
     Abort
   ${EndIf}
   File "${SRC}\arcana_rollback.dll"
@@ -81,6 +82,8 @@ Section "${APPNAME} (required)" SecMain
   SetOutPath "$INSTDIR\fonts"
   File "${SRC}\fonts\*.*"
   SetOutPath "$INSTDIR"
+  Delete "$INSTDIR\${LAUNCHER}.old"
+  Delete "$INSTDIR\arcana_launcher.exe"       ; the launcher's old name
   Delete "$INSTDIR\arcana_launcher.exe.old"
 
   ; build 119 had the mod in the game's folder (ArcanaPlusR\): take its settings, remove it.
@@ -109,7 +112,7 @@ Section "${APPNAME} (required)" SecMain
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "${APPNAME}"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTKEY}" "Publisher" "GGenie"
-  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\arcana_launcher.exe"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\${LAUNCHER}"
   WriteRegStr HKCU "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTKEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKCU "${UNINSTKEY}" "URLInfoAbout" "https://github.com/robinneefs/million-arthur-arcana-blood-plus-r"
@@ -117,12 +120,12 @@ Section "${APPNAME} (required)" SecMain
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
 
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
-  CreateShortcut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\arcana_launcher.exe"
+  CreateShortcut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\${LAUNCHER}"
   CreateShortcut "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk" "$INSTDIR\Uninstall.exe"
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\arcana_launcher.exe"
+  CreateShortcut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${LAUNCHER}"
 SectionEnd
 
 Section "Uninstall"
@@ -139,6 +142,8 @@ Section "Uninstall"
     RMDir /r "$0\ArcanaPlusR"
   ${EndIf}
   ; the mod's files, its logs and settings
+  Delete "$INSTDIR\${LAUNCHER}"
+  Delete "$INSTDIR\${LAUNCHER}.old"
   Delete "$INSTDIR\arcana_launcher.exe"
   Delete "$INSTDIR\arcana_launcher.exe.old"
   Delete "$INSTDIR\arcana_rollback.dll"

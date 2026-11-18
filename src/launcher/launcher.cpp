@@ -8,14 +8,17 @@
 // injected into the game, and nothing downloaded is run except the updated launcher itself.
 //
 // Usage:
-//   arcana_launcher.exe             the window
-//   arcana_launcher.exe --play      skip the window: put the DLL in place and start the game
+//   Arcana Blood +R.exe             the window (build 120i: was arcana_launcher.exe)
+//   Arcana Blood +R.exe --play      skip the window: put the DLL in place and start the game
 //   (--updated v0.2.0 beta: started by the updater; shows "updated to")
 //
 // Screens (the mock-up): checking, up to date, update available, updating, updated, update did
 // not work, plus starting the game / its problems. Controls: mouse, Enter = the gold button,
 // Esc = close, controller A = the gold button, X = the other button, B = close.
 
+// build 120i: the launcher's file name (shortcuts, installer, updater)
+#define LAUNCHER_EXE L"Arcana Blood +R.exe"
+#define LAUNCHER_EXE_A "Arcana Blood +R.exe"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <shellapi.h>
@@ -577,7 +580,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_ourDir = g_ourDir.substr(0, g_ourDir.find_last_of(L'\\') + 1);
     g_log = _wfopen((g_ourDir + L"launcher_log.txt").c_str(), L"w, ccs=UTF-8");
     Say(L"Arcana Blood +R launcher %hs (build %d)", MOD_VERSION, MOD_BUILD);
-    DeleteFileW((g_ourDir + L"arcana_launcher.exe.old").c_str());   // left from the last update
+    DeleteFileW((g_ourDir + LAUNCHER_EXE L".old").c_str());   // left from the last update
+    DeleteFileW((g_ourDir + L"arcana_launcher.exe").c_str());   // build 120i: the launcher's old name (test copies)
+    DeleteFileW((g_ourDir + L"arcana_launcher.exe.old").c_str());
     InitializeCriticalSection(&upd::g_lock);
     upd::g_dir = g_ourDir;
     wchar_t repo[128];

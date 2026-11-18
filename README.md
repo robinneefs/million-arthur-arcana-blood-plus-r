@@ -82,7 +82,7 @@ To remove it: Windows Settings › Apps › Arcana Blood +R › Uninstall.
 
 1. Download `ArcanaBlood-PlusR-v….zip`.
 2. Unzip it anywhere you like, **but not inside the game's folder**.
-3. Start `arcana_launcher.exe` from that folder.
+3. Start `Arcana Blood +R.exe` from that folder.
 
 To remove it: delete the folder, and `dinput8.dll` from the game's folder.
 
