@@ -27,7 +27,7 @@
 
 **Arcana Blood +R** is a fan-made mod for the Steam version of Million Arthur: Arcana Blood. It replaces the game's online play with **rollback netcode**, so online matches feel close to playing side by side, and gives the game a new front end built around **rooms** where several pairs of players can play at the same time.
 
-The mod is loaded by a small launcher and **never changes the game's files**.
+Start it with its launcher. The launcher keeps the mod up to date and starts the game with it. **No game file is changed**: the launcher only adds one small file, `dinput8.dll`, to the game's folder. That file does nothing unless the launcher started the game, so the game started from Steam stays the plain game.
 
 <p align="center">
   <img src="docs/screenshots/main-menu.png" alt="Main menu" width="100%">
@@ -84,18 +84,18 @@ To remove it: Windows Settings › Apps › Arcana Blood +R › Uninstall.
 2. Unzip it anywhere you like, **but not inside the game's folder**.
 3. Start `arcana_launcher.exe` from that folder.
 
-To remove it: delete the folder.
+To remove it: delete the folder, and `dinput8.dll` from the game's folder.
 
 </td>
   </tr>
 </table>
 
-The launcher finds the game through Steam, starts it and loads the mod. **Steam has to be running.** The game opens straight on the mod's main menu.
+Press **Play**. The launcher finds the game through Steam, makes sure its small `dinput8.dll` is in the game's folder (it puts it back by itself after a game reinstall), and starts the game with the mod. **Steam has to be running.** The game opens straight on the mod's main menu. Started from Steam directly, the game is the plain game; hold **Shift** while it starts to skip the mod once.
 
 > [!NOTE]
-> The first time, Windows may show **"Windows protected your PC"**, because the launcher and installer are not code-signed (signing costs a yearly fee). Click **More info › Run anyway**. Some antivirus programs also distrust launchers that load a mod into a game; the full source code is in this repository.
+> The first time, Windows may show **"Windows protected your PC"**, because the launcher and installer are not code-signed (signing costs a yearly fee). Click **More info › Run anyway**. If your antivirus removes a file of the mod, restore it and allow the mod's folder: it is a false alarm (please tell us in an issue). Nothing is injected into the game, and the updater only installs files whose checksum matches the release. The full source code is in this repository.
 
-**Updating:** the launcher checks this repository's releases each time it starts. When there is a newer version it shows what's new and asks before installing it. Your settings and My setup are kept. You can also install a new version over the old one by hand, either way.
+**Updating:** the launcher checks this repository's releases each time it starts. When there is a newer version it shows what's new, and one click installs it in a few seconds (the download's checksum is checked, and nothing changes if anything fails). Your settings and My setup are kept. You can also install a new version over the old one by hand, either way.
 
 ## 🎮 First steps
 
@@ -120,6 +120,9 @@ Both players need the same version of the mod; if they don't, the message tells 
 | --- | --- |
 | "Could not find the game" | Make sure the game is installed through Steam and Steam is running. |
 | "The game is already running" | Close the game first, then start the launcher again. |
+| The game starts without the mod | Start it from the launcher (Play), not from Steam. |
+| Windows or the antivirus warns about the mod | See the note under [Install](#-install): it is a false alarm. |
+| "Another mod's dinput8.dll is in the game folder" | The launcher can set it aside as `dinput8.dll.before-plusr`; uninstalling puts it back. |
 | The room list is empty | Only rooms of the same mod version are shown. Create a room, or ask your friend for an invite or the room code. |
 | "That room uses a newer/older version" | Whoever has the older version: close the game and start the launcher; it offers the update. |
 | Choppy online play | Raise the input delay in Settings › Online by 1. A wired connection helps more than anything. |
@@ -149,7 +152,8 @@ The version is set in `src/mod/version.h`. Settings for testing the netcode are 
 | Folder | What is in it |
 | --- | --- |
 | `src/mod/` | The mod DLL that runs inside the game |
-| `src/launcher/` | The launcher that starts the game with the mod (and checks for updates) |
+| `src/launcher/` | The launcher: update check and install, starts the game with the mod |
+| `src/loader/` | The small `dinput8.dll` that loads the mod when the launcher started the game |
 | `installer/` | The NSIS installer script |
 | `tools/` | The release and icon scripts |
 | `third_party/imgui/` | Dear ImGui 1.82, the UI library |
