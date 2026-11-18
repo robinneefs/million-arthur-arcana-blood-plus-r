@@ -96,8 +96,10 @@ static void DcPopup(const char* name, uint8_t why, bool inMatch, float t) {
     MmImg(dl, "MA10_CMN", 83, bx0 - 60, by0 - 18, bw + 120, 100, MmGlowCol(P.glow, (0.4f + 0.15f * pulse) * in), ImVec2(0, 0), ImVec2(1, 1), true);
     dl->AddRectFilled(CP(bx0, by0), CP(bx1, by1), MmC(P.selFill, in), CV(32));
     dl->AddRect(CP(bx0, by0), CP(bx1, by1), MmC(P.selOut, in), CV(32), 0, CV(2));
-    MmPadButton(dl, bx0 + 40, by0 + 14, 'A', MmRGBA(40, 160, 70, in));
-    MmText(dl, g_fMenu, 26, bx0 + 96, (by0 + by1) * 0.5f, MmC(P.selOut, in), "OK", 0, 3, MmC(P.selOut, in));
-    MmText(dl, g_fMenu, 26, bx0 + 96, (by0 + by1) * 0.5f, MmC(P.selFill, in), "OK", 0, 0, 0, 1);
+    // build 120h: badge + OK centred in the button together
+    float okw = MmText(dl, g_fMenu, 26, -9999, -9999, 0, "OK"), cx0 = (bx0 + bx1) * 0.5f - (36 + 16 + okw) * 0.5f;
+    MmPadButton(dl, cx0, by0 + 14, 'A', MmRGBA(40, 160, 70, in));
+    MmText(dl, g_fMenu, 26, cx0 + 52, (by0 + by1) * 0.5f, MmC(P.selOut, in), "OK", 0, 3, MmC(P.selOut, in));
+    MmText(dl, g_fMenu, 26, cx0 + 52, (by0 + by1) * 0.5f, MmC(P.selFill, in), "OK", 0, 0, 0, 1);
     dl->PopClipRect();
 }

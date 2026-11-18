@@ -387,7 +387,7 @@ static void MmSetupFrame() {
     MmSection(dl, 60, 170, 760, 470, "CHARACTER");
     secFrame(0, 60, 170, 760, 470);
     for (int i = 0; i < 14; i++) {
-        float x = 78 + (i % 7) * 97, y = 192 + (i / 7) * 136;
+        float x = 75 + (i % 7) * 97, y = 188 + (i / 7) * 136;   // build 120h: centred in the box
         bool rnd = i == SU_NCHAR;
         bool picked = rnd ? SU.chara == SU_RANDOM : i == SU.chara;
         SuCard(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[i], x, y, 88, 128, picked, SU.sec == 0 && SU.pick < 0 && i == SU.charCur, T.pulse);
@@ -401,7 +401,7 @@ static void MmSetupFrame() {
         secFrame(1, 60, 510, 760, 690);
         int who = SU.chara == SU_RANDOM ? -1 : SU.chara;
         for (int i = 0; i < 21; i++) {
-            float x = 78 + (i % 11) * 62 + (i >= 11 ? 31 : 0), y = 532 + (i / 11) * 74;
+            float x = 72 + (i % 11) * 62 + (i >= 11 ? 31 : 0), y = 531 + (i / 11) * 74;   // build 120h: centred (was 6 px over the right edge)
             bool on = i == SU.color, cur = on && SU.sec == 1 && SU.pick < 0;
             if (cur) MmImg(dl, "MA10_CMN", 39, x - 20, y - 20, 96, 104, MmGlowCol(P.glow, 0.4f + 0.2f * T.pulse), ImVec2(0, 0), ImVec2(1, 1), true);
             dl->AddRectFilled(CP(x, y), CP(x + 56, y + 64), MmC(P.bgTop, 1.0f), CV(5));
@@ -417,21 +417,22 @@ static void MmSetupFrame() {
         MmSection(dl, 60, 730, 760, 940, "STAGE");
         secFrame(2, 60, 730, 760, 940);
         for (int i = 0; i <= SU_NSTAGE; i++) {
-            float x = 80 + (i % 5) * 134, y = 752 + (i / 5) * 92;
+            float x = 80 + (i % 5) * 134, y = 750 + (i / 5) * 92;
             bool rnd = i == SU_NSTAGE;
             bool picked = rnd ? SU.stage == SU_RANDOM : i == SU.stage;
             SuCard(dl, "MA10_CSEL", rnd ? 14 : 6 + i, x, y, 124, 79, picked, SU.sec == 2 && SU.pick < 0 && picked, T.pulse);
             if (mouseOk && MmHover(x, y, x + 124, y + 79)) { SU.sec = 2; SU.stage = rnd ? SU_RANDOM : i; SU.dirty = true; MM_SND |= 1; }
         }
-        MmText(dl, g_fUi, 17, 80 + 4 * 134 + 62, 876, MmC(P.faint), "In a match: random", 1);
-        MmText(dl, g_fUi, 17, 80 + 4 * 134 + 62, 898, MmC(P.faint), "between both picks", 1);
+        MmText(dl, g_fUi, 16, 80 + 4 * 134 + 62, 862, MmC(P.faint), "In a match:", 1);   // build 120h: fits its slot
+        MmText(dl, g_fUi, 16, 80 + 4 * 134 + 62, 884, MmC(P.faint), "random between", 1);
+        MmText(dl, g_fUi, 16, 80 + 4 * 134 + 62, 906, MmC(P.faint), "both picks", 1);
     }
 
     // ---- middle: preview: the fight sprite in the picked colour, standing on the picked stage ----
     {
-        float x0 = 800, x1 = 1260;
+        float x0 = 800, x1 = 1400;   // build 120h: wider; the presets column needed less room
         MmSection(dl, x0, 170, x1, 940, "PREVIEW");
-        float sx0 = x0 + 16, sx1 = x1 - 16, sy0 = 186, sy1 = 640;
+        float sx0 = x0 + 16, sx1 = x1 - 16, sy0 = 186, sy1 = 680;
         dl->PushClipRect(CP(sx0, sy0), CP(sx1, sy1), true);
         float bh = sy1 - sy0, bw = bh * 723.0f / 460.0f;
         MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, (sx0 + sx1) / 2 - bw / 2, sy0, bw, bh, MmRGBA(255, 255, 255, 0.9f));
@@ -450,7 +451,7 @@ static void MmSetupFrame() {
         }
         dl->PopClipRect();
         dl->AddRect(CP(sx0, sy0), CP(sx1, sy1), MmC(P.gold, 0.6f), CV(3), 0, CV(1.5f));
-        float y = 676;
+        float y = 718;
         const char* nm = SU.chara == SU_RANDOM ? "Random character" : SU_CHARS[SU.chara];
         MmText(dl, g_fUiBold, strlen(nm) > 22 ? 28.0f : 34.0f, (x0 + x1) / 2, y, MmC(P.text), nm, 1, 2, MmC(P.ink));
         char s2[64];
@@ -460,39 +461,40 @@ static void MmSetupFrame() {
         MmLine(dl, x0 + 30, y + 72, x1 - x0 - 60, 1, MmC(P.acc, 0.6f));
         MmText(dl, g_fMenu, 13, x0 + 30, y + 96, MmC(P.faint), "SUPPORT KNIGHTS");
         MmText(dl, g_fUiBold, 22, x1 - 30, y + 96, MmC(P.gold), SU.p[SU.inUse].name, 2);
-        for (int k = 0; k < 3; k++) {
-            float bx = x0 + 30 + k * 138, by = y + 116;
-            MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), bx, by, 128, 59);
-            dl->AddRect(CP(bx, by), CP(bx + 128, by + 59), MmC(P.gold, 0.7f), CV(3), 0, CV(1.5f));
+        for (int k = 0; k < 3; k++) {   // three across the full width, 30 px in from both sides
+            const float kw = (x1 - x0 - 60 - 2 * 12) / 3, kh = kw * 59 / 128;
+            float bx = x0 + 30 + k * (kw + 12), by = y + 114;
+            MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), bx, by, kw, kh);
+            dl->AddRect(CP(bx, by), CP(bx + kw, by + kh), MmC(P.gold, 0.7f), CV(3), 0, CV(1.5f));
         }
     }
 
     // ---- right: assist presets ----
     {
-        float x0 = 1300, x1 = 1860;
-        MmSection(dl, x0, 170, x1, 940, "SUPPORT KNIGHT PRESETS");
+        float x0 = 1440, x1 = 1860;   // build 120h: just as wide as the rows need
+        MmSection(dl, x0, 170, x1, 940, "SUPPORT KNIGHTS");
         secFrame(3, x0, 170, x1, 940);
         for (int i = 0; i < SU_NPRESET; i++) {
-            float y = 190 + i * 93;
+            float y = 188 + i * 93;
             bool cur = SU.sec == 3 && i == SU.presetCur, use = i == SU.inUse;
             if (cur && SU.pick < 0) MmImg(dl, "MA10_CMN", 83, x0 + 10, y - 4, x1 - x0 - 20, 92, MmGlowCol(P.glow, 0.45f), ImVec2(0, 0), ImVec2(1, 1), true);
             if (use) dl->AddRect(CP(x0 + 14, y), CP(x1 - 14, y + 84), MmC(P.gold, 0.9f), CV(6), 0, CV(2));
             char n[4]; snprintf(n, sizeof n, "%d", i + 1);
-            MmText(dl, g_fMenu, 22, x0 + 40, y + 42, use ? MmC(P.gold) : MmC(P.faint), n, 1);
+            MmText(dl, g_fMenu, 22, x0 + 44, y + 42, use ? MmC(P.gold) : MmC(P.faint), n, 1);
             if (SU.rename == i) {
-                if (MmTextField("##presetname", SU.p[i].name, sizeof SU.p[i].name, x0 + 64, y + 2, x1 - 150, y + 36, "Name of the preset", SU.focusName)) {
+                if (MmTextField("##presetname", SU.p[i].name, sizeof SU.p[i].name, x0 + 70, y + 2, x1 - 140, y + 36, "Name of the preset", SU.focusName)) {
                     ImGui::ClearActiveID();
                     SU.rename = -1; SU.dirty = true; MM_SND |= 2;
                 }
                 SU.focusName = false;
-            } else MmText(dl, g_fUiBold, 24, x0 + 70, y + 20, cur || use ? MmC(P.gold) : MmC(P.text), SU.p[i].name);
-            if (use) MmPill(dl, x1 - 80, y + 20, 100, 26, "IN USE", P.gold, true);
+            } else MmText(dl, g_fUiBold, 24, x0 + 76, y + 20, cur || use ? MmC(P.gold) : MmC(P.text), SU.p[i].name);
+            if (use) MmPill(dl, x1 - 78, y + 20, 100, 26, "IN USE", P.gold, true);
             for (int k = 0; k < 3; k++) {
-                float bx = x0 + 70 + k * 108, by = y + 36;
+                float bx = x0 + 76 + k * 108, by = y + 36;
                 MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[i].a[k]), bx, by, 100, 46, cur || use ? IM_COL32_WHITE : MmRGBA(200, 180, 180));
                 dl->AddRect(CP(bx, by), CP(bx + 100, by + 46), MmC(P.gold, cur || use ? 0.7f : 0.45f), CV(3), 0, CV(1.5f));
             }
-            if (mouseOk && MmHover(x0 + 70, y + 36, x0 + 70 + 3 * 108, y + 82)) {   // a click on the knights: edit them
+            if (mouseOk && MmHover(x0 + 76, y + 36, x0 + 76 + 3 * 108, y + 82)) {   // a click on the knights: edit them
                 SU.sec = 3; SU.presetCur = i; SU.pick = 0; SU.pickSel = SU.p[i].a[0]; MM_SND |= 2;
             } else if (mouseOk && MmHover(x0 + 14, y, x1 - 14, y + 84)) {          // elsewhere on the row: use it
                 SU.sec = 3; SU.presetCur = i;
@@ -539,7 +541,7 @@ static void MmSetupFrame() {
             }
         }
         // the full card
-        if (SU.pick >= 0) SuCardDraw(dl, 1260, y0 + 60, 1.25f, SU.pickSel);
+        if (SU.pick >= 0) SuCardDraw(dl, 1280, y0 + 60, 1.25f, SU.pickSel);   // build 120h: 40 px from the right edge, like the grid on the left
         MmLine(dl, x0 + 30, y1 - 66, x1 - x0 - 60, 1, MmC(P.acc, 0.5f));
         MmPadButton(dl, x0 + 30, y1 - 52, 'A', MmRGBA(40, 160, 70));
         MmText(dl, g_fMenu, 13, x0 + 74, y1 - 34, MmC(P.text), "Put in slot");
@@ -579,8 +581,8 @@ static void SuPanel(ImDrawList* dl, float x0, float y0, float in) {
     const MmPal& P = MmP();
     SuLoad();
     bool rnd = SU.chara == SU_RANDOM;
-    MmImg(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[SU.chara], x0 + 24, y0 + 62, 112, 164, MmRGBA(255, 255, 255, in));
-    float x = x0 + 154, y = y0 + 72;
+    MmImg(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[SU.chara], x0 + 24, y0 + 62, 110, 161, MmRGBA(255, 255, 255, in));
+    float x = x0 + 150, y = y0 + 72;   // build 120h: same 24 px padding on the left and right
     const char* nm = rnd ? "Random" : SU_CHARS[SU.chara];
     MmText(dl, g_fUiBold, strlen(nm) > 18 ? 21.0f : 27.0f, x, y, MmC(P.text, in), nm);
     dl->AddRectFilled(CP(x, y + 20), CP(x + 26, y + 46), MmC(P.bgTop, in), CV(4));
@@ -595,7 +597,7 @@ static void SuPanel(ImDrawList* dl, float x0, float y0, float in) {
     MmText(dl, g_fUi, 21, x + 84, y + 81, MmC(P.dim, in), s);
     MmText(dl, g_fMenu, 11, x, y + 124, MmC(P.faint, in), "KNIGHTS");
     MmText(dl, g_fUiBold, 21, x + 90, y + 124, MmC(P.text, in), SU.p[SU.inUse].name);
-    for (int k = 0; k < 3; k++) MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), x + k * 88, y + 142, 82, 38, MmRGBA(255, 255, 255, in));
+    for (int k = 0; k < 3; k++) MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), x + k * 91, y + 140, 84, 39, MmRGBA(255, 255, 255, in));
 }
 // build 112: My setup as one row (the room's MY MATCH SETTINGS bar)
 static int SuPortraitOf(int chara) { return chara >= 0 && chara < SU_NCHAR ? SU_PORTRAIT[chara] : 48; }
@@ -603,12 +605,13 @@ static void SuRoomPanel(ImDrawList* dl, float x0, float y0, float x1, float y1, 
     const MmPal& P = MmP();
     SuLoad();
     bool rnd = SU.chara == SU_RANDOM;
-    MmImg(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[SU.chara], x0 + 16, y0 + 12, 70, 102, MmRGBA(255, 255, 255, in));
+    // build 120h: 20 px padding inside the bar; Y sits at the right end on its own
+    MmImg(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[SU.chara], x0 + 20, y0 + 13, 70, 102, MmRGBA(255, 255, 255, in));
     float cy = (y0 + y1) / 2;
-    MmText(dl, g_fMenu, 11, x0 + 102, cy - 20, MmC(P.faint, in), "CHARACTER");
+    MmText(dl, g_fMenu, 11, x0 + 106, cy - 20, MmC(P.faint, in), "CHARACTER");
     const char* nm = rnd ? "Random" : SU_CHARS[SU.chara];
-    MmText(dl, g_fUiBold, strlen(nm) > 16 ? 19.0f : 25.0f, x0 + 102, cy + 10, MmC(P.text, in), nm);
-    float x = x0 + 330;
+    MmText(dl, g_fUiBold, strlen(nm) > 16 ? 19.0f : 25.0f, x0 + 106, cy + 10, MmC(P.text, in), nm);
+    float x = x0 + 336;
     MmText(dl, g_fMenu, 11, x, cy - 20, MmC(P.faint, in), "COLOUR");
     dl->AddRectFilled(CP(x, cy - 2), CP(x + 26, cy + 24), MmC(P.bgTop, in), CV(4));
     if (!rnd) SuHead(dl, SU.chara, SU.color, x, cy - 2, 26, 26);
@@ -616,18 +619,19 @@ static void SuRoomPanel(ImDrawList* dl, float x0, float y0, float x1, float y1, 
     char c[24]; snprintf(c, sizeof c, "Colour %d", SU.color + 1);
     MmText(dl, g_fUi, 21, x + 36, cy + 11, MmC(P.dim, in), c);
     x = x0 + 470;
-    MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, x, cy - 30, 100, 64, MmRGBA(255, 255, 255, in));
-    dl->AddRect(CP(x, cy - 30), CP(x + 100, cy + 34), MmRGBA(214, 170, 82, in), 0, 0, CV(1));
+    MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, x, cy - 29, 90, 57, MmRGBA(255, 255, 255, in));
+    dl->AddRect(CP(x, cy - 29), CP(x + 90, cy + 28), MmRGBA(214, 170, 82, in), 0, 0, CV(1));
+    x -= 10;
     MmText(dl, g_fMenu, 11, x + 114, cy - 20, MmC(P.faint, in), "STAGE");
     char st[24];
     if (SU.stage == SU_RANDOM) snprintf(st, sizeof st, "Random"); else snprintf(st, sizeof st, "Stage %02d", SU.stage + 1);
     MmText(dl, g_fUiBold, 25, x + 114, cy + 10, MmC(P.text, in), st);
-    x = x0 + 700;
+    x = x0 + 676;
     MmText(dl, g_fMenu, 11, x, cy - 26, MmC(P.faint, in), "SUPPORT KNIGHTS");
     MmText(dl, g_fUiBold, 21, x, cy + 0, MmC(P.text, in), SU.p[SU.inUse].name);
-    for (int k = 0; k < 3; k++) MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), x + k * 62, cy + 16, 58, 27, MmRGBA(255, 255, 255, in));
-    MmPadButton(dl, x1 - 104, cy - 18, 'Y', MmRGBA(210, 170, 20, in));
-    MmText(dl, g_fMenu, 14, x1 - 60, cy, MmC(P.text, in), "Edit");
+    for (int k = 0; k < 3; k++) MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), x + k * 58, cy + 16, 54, 25, MmRGBA(255, 255, 255, in));
+    MmPadButton(dl, x1 - 56, cy - 28, 'Y', MmRGBA(210, 170, 20, in));
+    MmText(dl, g_fMenu, 10, x1 - 38, cy + 26, MmC(P.text, in), "EDIT", 1);
 }
 // open the editor from the main menu
 static void SuOpen() {
