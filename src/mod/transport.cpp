@@ -824,7 +824,12 @@ void RoomTick(int build) {
             if (kind == 1) {
                 LobbyCreated r{};
                 if (pGetAPICallResult(g_utils, c, &r, sizeof r, 513, &failed) && !failed && r.result == 1 && r.lobby) EnterRoom(r.lobby, build, true);
-                else { RV.state = ROOM_FAILED; snprintf(RV.err, sizeof RV.err, "Steam could not open the room (code %d)", r.result); Log("room: create failed (%d)", r.result); }
+                else {   // build 120e: 3 = Steam isn't connected to its servers (Offline Mode, or the account is in a game on another PC)
+                    RV.state = ROOM_FAILED;
+                    if (r.result == 3) snprintf(RV.err, sizeof RV.err, "Steam is offline: in Steam, pick Steam > Go Online");
+                    else snprintf(RV.err, sizeof RV.err, "Steam could not open the room (code %d)", r.result);
+                    Log("room: create failed (%d)", r.result);
+                }
             } else if (kind == 3) {
                 LobbyEnter r{};
                 if (pGetAPICallResult(g_utils, c, &r, sizeof r, 504, &failed) && !failed && r.response == 1 && r.lobby) {
