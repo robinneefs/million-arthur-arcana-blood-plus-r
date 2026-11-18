@@ -40,7 +40,10 @@ static const int LB_CHARS = 13, LB_CHARS_ALL = 14, LB_BOSS = 0x0D, LB_COLORS = 2
 // hold the game's own stage id.
 // Build 102: only the 8 stages of normal play (the ones with a picture in the game's stage
 // select, MA10_CSEL 6-13); 08 is left out, also from Random.
-static const uint8_t LB_STAGE_IDS[LB_STAGES] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+// Build 120d: position = the game's stage-select picture (MA10_CSEL 6 + position), value = the
+// stage id that picture shows (checked fight by fight on 2026-11-18; the game numbers its
+// pictures differently from its stages)
+static const uint8_t LB_STAGE_IDS[LB_STAGES] = {0x07, 0x03, 0x02, 0x01, 0x06, 0x04, 0x00, 0x05};
 // Build 72: [ui] show_boss=1 in rollback.ini puts the boss back in the list, for the boss-crash test only.
 static int g_showBoss = -1;
 static inline int LbCharCount() {
