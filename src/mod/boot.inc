@@ -65,6 +65,13 @@ static bool rmPending = false;          // rematch agreed: restart after frame r
 static uint32_t rmAt = 0;
 static uint16_t rmYesEpoch = 0xFFFF;    // the restart's synced screen: frame 1 answers YES there
 static bool rmYesArmed = false;
+// Build 122 (found in the build 122 one-PC test: the check before frame 48 of the rematch's
+// synced screen replayed differently): rmYesArmed goes off in Tick when the game has taken the
+// rematch, so a rollback or check that re-ran a frame BEFORE that point gave the box another
+// answer than the first run did (and a re-run that takes it a frame later would never get YES).
+// Now, until the fight has really restarted, the box answers YES whenever the fight is in its
+// result phase (7), in the first run and in every re-run alike. Phase 8 on stays as before.
+static bool rmYesHold = false;
 static bool restarting = false;         // build 107b: the game took the rematch, waiting for it to start again
 static bool answerNo = false;           // Back to room: answer NO, the fight screen ends as before
 static uint32_t winsAtStart[2] = {0, 0};
@@ -174,6 +181,11 @@ static const uint32_t FN_DLG_DONE = 0x00596860, FN_DLG_ANSWER = 0x00596890;
 static const uint32_t CALLS_DLG_DONE[] = {0x00441F8B, 0x00441F9D, 0x00442044};
 static const uint32_t CALLS_DLG_ANSWER[] = {0x00441FAF, 0x00441FBE, 0x00442052};
 static const uint32_t FIGHT_PHASE = 0x04B79340, FIGHT_STATE = 0x04B79490;
+static bool RmYesNow() {
+    if (rmYesEpoch != N.epoch) return false;
+    if (rmYesArmed) return true;
+    return rmYesHold && U32(FIGHT_PHASE) == 7;
+}
 static bool skipBox = false;
 static int boxSkips = 0;
 static int __cdecl H_DlgDone(int p) {
@@ -184,14 +196,14 @@ static int __cdecl H_DlgDone(int p) {
         // build 107b (test 107: a faked YES left the game's boxes open, and the fight waited
         // for them): in the rematch's synced screen both players really press A on YES
         // (NetFill), and the game's own boxes answer
-        if (rmYesArmed && rmYesEpoch == N.epoch) return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_DONE)(p);
+        if (RmYesNow()) return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_DONE)(p);
         boxSkips++;
         return answerNo ? 1 : 0;
     }
     return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_DONE)(p);
 }
 static int __cdecl H_DlgAnswer(int p) {
-    if (skipBox && st == B_FIGHT && !(rmYesArmed && rmYesEpoch == N.epoch)) return 0;
+    if (skipBox && st == B_FIGHT && !RmYesNow()) return 0;
     return reinterpret_cast<int(__cdecl*)(int)>(FN_DLG_ANSWER)(p);
 }
 // Build 107b: the game's boxes (WINNER / LOSER, "Request rematch?") are not drawn while our
@@ -387,6 +399,7 @@ static void RematchNow() {
     if (g_frame != rmAt) Log("boot: warning: rematch restart at frame %u, agreed %u", g_frame, rmAt);
     rmYesEpoch = (uint16_t)(N.epoch + 1);
     rmYesArmed = true;
+    rmYesHold = true;
     N.sceneVt = 0xFFFFFFFFu;            // NetBeforeInput: "a new screen", next frame
     Log("boot: frame %u: restarting the fight in place (synced screen %u next)", g_frame, rmYesEpoch);
 }
@@ -507,6 +520,7 @@ static void Tick() {
             }
             if (restarting && ph != 8) {   // build 107b: our screen (and the hidden boxes) stay until the game restarts
                 restarting = false;
+                rmYesHold = false;         // build 122
                 Log("boot: fight frame %u: the fight starts again in place (phase %d)", stateFrames, (int)ph);
                 g_postOn = false;
                 g_ptrMapStale = true;      // build 119: the restart moved the characters' data (see net_session.inc)
@@ -593,6 +607,7 @@ static void SessionEnd() {
     if (st != B_IDLE) SetState(B_IDLE);
     bootedMatch = 0;
     postFight = rmPending = rmYesArmed = answerNo = restarting = false;
+    rmYesHold = false;
     g_postOn = false;
 }
 
