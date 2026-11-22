@@ -3,7 +3,12 @@
 // .txt / .log / .ini files next to the mod) into one zip on the Desktop, with Steam IDs,
 // the Steam name, the PC name and the Windows user name hidden. Big logs: only the
 // last 4 MB. Runs on its own thread; nothing is sent anywhere.
+// Build 121: compressed, the last 5 runs of each log, crash reports (crash_*.txt) and memory
+// snapshots (desync_*.bin); kept under 8 MB by leaving out the oldest logs first.
 // ---------------------------------------------------------------------------
+#ifndef UI_HARNESS
+#include "miniz.h"                 // build 121: deflate for the zip (third_party/miniz, MIT)
+#endif
 namespace logpack {
 
 static std::atomic<int> g_state{0};        // 0 idle, 1 packing, 2 done, 3 failed
@@ -42,7 +47,27 @@ static void MaskSteamIds(std::string& s) {
         i = k;
     }
 }
-struct Entry { std::string name, data; uint32_t crc; uint32_t off; };
+struct Entry { std::string name, data; uint32_t crc; uint32_t off; uint32_t size; uint16_t method; };
+// Build 121: binary files (desync_*.bin memory snapshots) keep their layout: the hidden names
+// become the same number of '#' (as plain text and as UTF-16).
+static void MaskSameLen(std::string& s, const std::string& what) {
+    if (what.size() < 3) return;
+    for (int wide = 0; wide < 2; wide++) {
+        std::string pat;
+        for (char c : what) { pat.push_back(c); if (wide) pat.push_back(0); }
+        for (size_t at = 0; (at = s.find(pat, at)) != std::string::npos; at += pat.size())
+            for (size_t i = 0; i < pat.size(); i += wide ? 2 : 1) s[at + i] = '#';
+    }
+}
+// Build 121: which files go first when the zip would be too big for a Discord upload (8 MB):
+// the oldest runs' logs, then older memory snapshots. Lower = dropped first.
+static int KeepRank(const std::string& n) {
+    if (n.find("_previous4") != std::string::npos) return 0;
+    if (n.find("_previous3") != std::string::npos) return 1;
+    if (n.find("_previous2") != std::string::npos) return 2;
+    if (n.compare(0, 7, "desync_") == 0) return 3;
+    return 9;
+}
 static void Put16(std::string& o, uint16_t v) { o.push_back((char)(v & 0xFF)); o.push_back((char)(v >> 8)); }
 static void Put32(std::string& o, uint32_t v) { Put16(o, (uint16_t)(v & 0xFFFF)); Put16(o, (uint16_t)(v >> 16)); }
 
@@ -66,7 +91,8 @@ static DWORD WINAPI Worker(void*) {
         do {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             const wchar_t* ext = wcsrchr(fd.cFileName, L'.');
-            if (!ext || (_wcsicmp(ext, L".txt") && _wcsicmp(ext, L".log") && _wcsicmp(ext, L".ini"))) continue;
+            bool bin = ext && !_wcsicmp(ext, L".bin") && !_wcsnicmp(fd.cFileName, L"desync_", 7);   // build 121: memory snapshots
+            if (!ext || (!bin && _wcsicmp(ext, L".txt") && _wcsicmp(ext, L".log") && _wcsicmp(ext, L".ini"))) continue;
             wchar_t path[MAX_PATH];
             _snwprintf(path, MAX_PATH, L"%ls%ls", util::ModDir(), fd.cFileName);
             HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -83,36 +109,62 @@ static DWORD WINAPI Worker(void*) {
             if (!e.data.empty()) ReadFile(f, &e.data[0], (DWORD)e.data.size(), &got, nullptr);
             CloseHandle(f);
             e.data.resize(got);
-            if (from) e.data = "(only the last 4 MB of this file)\r\n" + e.data;
-            MaskSteamIds(e.data);
-            for (auto& x : hide) ReplaceAll(e.data, x.first, x.second);
+            if (bin) {
+                for (auto& x : hide) MaskSameLen(e.data, x.first);
+            } else {
+                if (from) e.data = "(only the last 4 MB of this file)\r\n" + e.data;
+                MaskSteamIds(e.data);
+                for (auto& x : hide) ReplaceAll(e.data, x.first, x.second);
+            }
             char nm[MAX_PATH];
             snprintf(nm, sizeof nm, "%ls", fd.cFileName);
             e.name = nm;
             e.crc = Crc32((const uint8_t*)e.data.data(), e.data.size());
+            // build 121: compressed (deflate); text logs get about 10 times smaller
+            e.size = (uint32_t)e.data.size();
+            e.method = 0;
+            size_t clen = 0;
+            void* c = e.data.empty() ? nullptr : tdefl_compress_mem_to_heap(e.data.data(), e.data.size(), &clen, tdefl_create_comp_flags_from_zip_params(6, -15, 0));
+            if (c && clen < e.data.size()) { e.data.assign((const char*)c, clen); e.method = 8; }
+            if (c) mz_free(c);
             files.push_back(std::move(e));
         } while (FindNextFileW(h, &fd) && files.size() < 64);
         FindClose(h);
     }
     if (files.empty()) { snprintf(g_msg, sizeof g_msg, "No log files found next to the mod."); g_state = 3; return 0; }
+    // build 121: at most about 8 MB (Discord's upload limit for most people)
+    uint32_t dropped = 0;
+    for (;;) {
+        size_t total = 0;
+        for (auto& e : files) total += e.data.size() + e.name.size() + 80;
+        if (total <= (8u << 20) - (64u << 10)) break;
+        int low = 9; size_t at = 0;
+        for (size_t i = 0; i < files.size(); i++) {
+            int r = KeepRank(files[i].name);
+            if (r < low || (r == low && r == 3 && files[i].name < files[at].name)) { low = r; at = i; }
+        }
+        if (low == 9) break;
+        files.erase(files.begin() + at);
+        dropped++;
+    }
 
-    // a stored (uncompressed) zip
+    // a zip (build 121: deflate, stored when that is not smaller)
     SYSTEMTIME st;
     GetLocalTime(&st);
     uint16_t dt = (uint16_t)(((st.wYear - 1980) << 9) | (st.wMonth << 5) | st.wDay), tm = (uint16_t)((st.wHour << 11) | (st.wMinute << 5) | (st.wSecond / 2));
     std::string z;
     for (auto& e : files) {
         e.off = (uint32_t)z.size();
-        Put32(z, 0x04034B50); Put16(z, 20); Put16(z, 0); Put16(z, 0); Put16(z, tm); Put16(z, dt);
-        Put32(z, e.crc); Put32(z, (uint32_t)e.data.size()); Put32(z, (uint32_t)e.data.size());
+        Put32(z, 0x04034B50); Put16(z, 20); Put16(z, 0); Put16(z, e.method); Put16(z, tm); Put16(z, dt);
+        Put32(z, e.crc); Put32(z, (uint32_t)e.data.size()); Put32(z, e.size);
         Put16(z, (uint16_t)e.name.size()); Put16(z, 0);
         z += e.name;
         z += e.data;
     }
     uint32_t cd = (uint32_t)z.size();
     for (auto& e : files) {
-        Put32(z, 0x02014B50); Put16(z, 20); Put16(z, 20); Put16(z, 0); Put16(z, 0); Put16(z, tm); Put16(z, dt);
-        Put32(z, e.crc); Put32(z, (uint32_t)e.data.size()); Put32(z, (uint32_t)e.data.size());
+        Put32(z, 0x02014B50); Put16(z, 20); Put16(z, 20); Put16(z, 0); Put16(z, e.method); Put16(z, tm); Put16(z, dt);
+        Put32(z, e.crc); Put32(z, (uint32_t)e.data.size()); Put32(z, e.size);
         Put16(z, (uint16_t)e.name.size()); Put16(z, 0); Put16(z, 0); Put16(z, 0); Put16(z, 0); Put32(z, 0); Put32(z, e.off);
         z += e.name;
     }
@@ -131,7 +183,8 @@ static DWORD WINAPI Worker(void*) {
     if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
     if (!ok) { snprintf(g_msg, sizeof g_msg, "Could not write the zip to the Desktop (error %lu).", GetLastError()); g_state = 3; return 0; }
     const wchar_t* base = wcsrchr(g_zip, L'\\');
-    snprintf(g_msg, sizeof g_msg, "Saved on the Desktop: %ls  (%u files, %u KB)", base ? base + 1 : g_zip, (unsigned)files.size(), (unsigned)((z.size() + 1023) / 1024));
+    snprintf(g_msg, sizeof g_msg, "Saved on the Desktop: %ls  (%u files, %u KB)%s", base ? base + 1 : g_zip, (unsigned)files.size(), (unsigned)((z.size() + 1023) / 1024),
+             dropped ? " - the oldest logs were left out to stay under 8 MB" : "");
     Log("logs: packed %u files into %ls (%u bytes)", (unsigned)files.size(), g_zip, (unsigned)z.size());
     g_state = 2;
     return 0;

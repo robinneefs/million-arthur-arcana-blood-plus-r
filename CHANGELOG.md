@@ -3,6 +3,26 @@
 Versions follow major.minor.patch: the middle number goes up for new features, the last one for fixes.
 "build" is the internal test build number (also in `src/mod/version.h`).
 
+## 0.2.1 beta (build 121, 2026-11-22)
+
+Extra logging to find the real desyncs some players saw online with v0.2.0, and a fix for the freeze at input delay 0.
+
+**Fixes**
+- With input delay 0 on both sides, the match froze at the very start (until one player closed the game). The first frames of a fight and the rematch box run in step and now use at least 1 frame of delay there; the fight itself still runs at delay 0.
+- After a desync, the check no longer makes about one frame in 30 a little slower for the rest of the fight.
+
+**Desync logs**
+- The random numbers of every fight frame are now compared between the two PCs (before: once every 30 frames), so the log names the exact frame where the two games went differently.
+- At that frame both PCs write which game code asked for random numbers in the frames around it, both players' inputs, and what the netcode did just before (rollbacks, waits).
+- After the first desync of a fight, both PCs save the fight's memory at the same moment and compare it: the log lists where it differs, and the differing parts go into a `desync_*.bin` file. `tools/desync-compare.py` compares the files of both players.
+- The first desync of each fight lists every differing value of the characters' data (before: the first 4).
+- Ping and lost pings are written to the log every 10 seconds, plus one summary line per fight (ping, rollbacks, waits, desync check).
+
+**Pack logs**
+- Keeps the logs of the last 5 game runs (before: 2), for the game and the launcher.
+- A crash now also writes its own crash report file (what crashed and the last 300 log lines); the 5 newest are kept and Pack logs includes them. The log also says when the last run did not close normally.
+- The zip is compressed (about 10 times smaller) and stays under 8 MB so it fits on Discord; the oldest logs are left out first if needed.
+
 ## 0.2.0 beta (build 120, 2026-11-18)
 
 **Launcher and install (antivirus)**

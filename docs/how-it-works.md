@@ -28,6 +28,7 @@ This is a short overview for people (or AIs) who want to build on the mod.
   - `util.cpp` / `util.h`: logging, ini reading, small helpers.
   - `memlist_builtin.h`: the memory list (see below), built into the mod.
   - `perf.inc`, `heapdiag.inc`, `crashdiag.inc`, `vmfree.inc`: timing, heap and crash reports for the log.
+  - `desynclog.inc` (build 121): per-frame random-number check, rollback history, memory snapshot at a desync, ping log.
 - **Dear ImGui** (`third_party/imgui`): the UI library, version 1.82, MIT licence.
 
 ## Frame loop and rollback
@@ -46,6 +47,7 @@ Lessons from testing:
 ## Checks
 
 - Online, both PCs exchange a fingerprint of the fight state every few frames; a mismatch is logged as a desync.
+- Since build 121 they also compare the random-number state of every fight frame (`desynclog.inc`). At the first frame that differs, both write the random-number callers, inputs and rollback history around it, and then compare a snapshot of the whole fight state at one agreed frame (differing parts in `desync_*.bin`, compared with `tools/desync-compare.py`).
 - In the test modes the mod also rewinds and replays the last frames with the final inputs and compares the result (`verify_every`). Each check replays only as many frames as fit in `verify_budget_ms`, so the test does not slow down a slower PC.
 
 ## Online sessions
@@ -70,4 +72,4 @@ When the match setup is final, the mod takes the game from its main menu to the 
 
 ## Logs
 
-The mod writes `rollback_log.txt` next to itself and keeps the previous session's log as `rollback_log_previous.txt`. A crash writes the crash point, the registers and the call chain to the log.
+The mod writes `rollback_log.txt` next to itself and keeps the logs of the 4 runs before it (`rollback_log_previous.txt`, `_previous2.txt` .. `_previous4.txt`). A crash writes the crash point, the registers and the call chain to the log, and (build 121) a crash the game does not handle also writes `crash_<date>_<time>.txt` with the last 300 log lines.

@@ -578,6 +578,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     GetModuleFileNameW(nullptr, self, MAX_PATH);
     g_ourDir = self;
     g_ourDir = g_ourDir.substr(0, g_ourDir.find_last_of(L'\\') + 1);
+    {   // build 121: keep the last 5 runs (launcher_log.txt, _previous.txt, _previous2..4.txt), like the mod's log
+        std::wstring b = g_ourDir + L"launcher_log";
+        for (int i = 4; i >= 1; i--) {
+            std::wstring from = i == 1 ? b + L".txt" : i == 2 ? b + L"_previous.txt" : b + L"_previous" + std::to_wstring(i - 1) + L".txt";
+            std::wstring to = i == 1 ? b + L"_previous.txt" : b + L"_previous" + std::to_wstring(i) + L".txt";
+            MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING);
+        }
+    }
     g_log = _wfopen((g_ourDir + L"launcher_log.txt").c_str(), L"w, ccs=UTF-8");
     Say(L"Arcana Blood +R launcher %hs (build %d)", MOD_VERSION, MOD_BUILD);
     DeleteFileW((g_ourDir + LAUNCHER_EXE L".old").c_str());   // left from the last update

@@ -52,7 +52,7 @@ struct NHello {
 struct NInput { NHdr h; uint32_t sceneVt, first, ack, cur; uint8_t count; int8_t ahead; uint8_t pad[2]; uint32_t in[32][2]; };
 struct NFp { NHdr h; uint32_t frame, seed; uint16_t nblk, pad; uint32_t hash[FP_NBLK]; };
 struct NRaw { NHdr h; uint32_t frame; uint16_t blk, len; uint32_t mask[8]; uint8_t data[FP_BLK]; };
-struct NPing { NHdr h; uint32_t t; };
+struct NPing { NHdr h; uint32_t t; uint32_t us; };   // build 121: us = send time in microseconds (ping log); t as before
 // Build 46: memory survey (page hashes of the game's .data, then the pages that differ)
 struct NSurv { NHdr h; uint32_t first; uint16_t count, pad; uint32_t hash[256]; };
 struct NSPage { NHdr h; uint32_t page; uint16_t part, pad; uint32_t mask[8]; uint8_t data[1024]; };
@@ -220,6 +220,15 @@ static bool NetOn() { return N.st == NS_ON; }
 static int NetRemoteSide() { return 1 - N.side; }
 static void NetSavePre(const std::vector<uint8_t>& pre) { N.pre = pre; }
 static inline bool NetRbMode() { return g_mode == Mode::SyncTest && g_rbOn && g_rbStarted; }
+// Build 121 (issue: freeze at fight start with input delay 0 on both PCs): frames that run
+// in step (no rollback yet, the rollback-off rematch box, rollback turned off) wait for the
+// other player's input of a frame BEFORE this PC makes its own input of that frame, so with
+// delay 0 both games waited for each other forever. In step, the delay is at least 1.
+static uint32_t ScreenDelay();
+static uint32_t InputDelayNow() {
+    uint32_t d = ScreenDelay();
+    return d == 0 && !NetRbMode() ? 1u : d;
+}
 // Menus wait for every input, so they get a bit more input delay (smoother
 // with lag, and nobody notices 4 frames in a menu). Fights use input_delay.
 static uint32_t ScreenDelay() {
@@ -319,7 +328,7 @@ static void LoopPeerHandle(const uint8_t* p, int n) {
         }
         uint32_t peerFrame = m->cur + (uint32_t)g_ncfg.loopLag;      // where the stand-in's game would be now
         if (m->sceneVt) {
-            uint32_t target = peerFrame + ScreenDelay();
+            uint32_t target = peerFrame + InputDelayNow();
             if (target > g_lp.ownNewest + 200) target = g_lp.ownNewest + 200;
             for (uint32_t f = g_lp.ownNewest + 1; f <= target; f++) {
                 NetIn& o = g_lp.own[f % 256];
@@ -365,6 +374,27 @@ static void LoopPeerHandle(const uint8_t* p, int n) {
         NPing r = *(const NPing*)p;
         r.h.type = M_PONG;
         LoopQueue(g_loopIn, &r, sizeof r);
+        break;
+    }
+    case 15: {   // build 121: M_RCHK (desynclog.inc): the stand-in has the same random numbers (loopback_test_desync: not from that frame on)
+        uint8_t b[512];
+        if (n > (int)sizeof b) break;
+        memcpy(b, p, n);
+        uint32_t first; memcpy(&first, b + 8, 4);
+        uint8_t cnt = b[12];
+        for (uint32_t i = 0; i < cnt && i < 16; i++)
+            if (g_ncfg.loopTestDesync > 0 && first + i >= (uint32_t)g_ncfg.loopTestDesync) b[16 + i * 4] ^= 1;
+        LoopQueue(g_loopIn, b, n);
+        break;
+    }
+    case 16: LoopQueue(g_loopIn, p, n); break;   // M_SNAP
+    case 17: {                                    // M_SNAPH: with loopback_test_desync, chunk 3 of each list differs
+        uint8_t b[1100];
+        if (n > (int)sizeof b) break;
+        memcpy(b, p, n);
+        uint32_t first; memcpy(&first, b + 16, 4);
+        if (g_ncfg.loopTestDesync > 0 && first == 0 && n >= 20 + 16) b[20 + 3 * 4] ^= 1;
+        LoopQueue(g_loopIn, b, n);
         break;
     }
     default: LoopPeerLobby(p, n); break;
@@ -563,8 +593,8 @@ static void FpCompare(FpLocal& L) {
     bool seedBad = L.seed != R.seed;
     if (seedBad) {
         NetDesync(L.frame, "random number state differs (this PC %08X, other PC %08X)", L.seed, R.seed);
-        if (N.desyncs > 3) return;     // build 77: the first times, also compare the memory to see what else differs
-        RandTraceDump("first random-number difference");
+        if (N.desyncs > 10) return;    // build 77 (build 121: 10 instead of 3): the first times, also compare the memory to see what else differs
+        // build 121: the rand trace is written by the per-frame check (RchkCompare), around the exact frame
     }
     uint32_t bad = 0;
     for (uint32_t b = 0; b < FP_NBLK; b++) {
@@ -575,6 +605,8 @@ static void FpCompare(FpLocal& L) {
     if (!bad) { if (!seedBad) N.fpOk++; }
     else if (N.fpFalse + N.desyncs < 30) Log("net: fingerprint of frame %u: %u of %u blocks differ, comparing them in full", L.frame, bad, FP_NBLK);
 }
+static void SnapPropose(const char* why);   // build 121 (desynclog.inc)
+static uint32_t g_dlFight = 0;              // build 121: fights started this session (a new one also after an in-place rematch)
 static void NetHandleRaw(const NRaw* m, int n) {
     if (n < (int)offsetof(NRaw, data) || m->blk >= FP_NBLK) return;
     FpLocal& L = N.fl[(m->frame / FP_EVERY) % 8];
@@ -587,9 +619,12 @@ static void NetHandleRaw(const NRaw* m, int n) {
     // map (made once per checked frame): a pointer into memory committed since the last map is
     // this PC's own address, not a desync. Each PC leaves out its own pointers this way.
     bool fresh = false;
+    struct DiffV { uint32_t o, a, b; };
+    std::vector<DiffV> all;
     for (int pass = 0; pass < 2; pass++) {
         diffs = ptrs = 0;
         detail[0] = 0;
+        all.clear();
         for (uint32_t o = lo, i = 0; o + 4 <= hi; o += 4, i++) {
             uint32_t bit = 1u << (i % 32);
             if ((L.mask[m->blk][i / 32] | m->mask[i / 32]) & bit) continue;
@@ -605,10 +640,21 @@ static void NetHandleRaw(const NRaw* m, int n) {
                 size_t len = strlen(detail);
                 snprintf(detail + len, sizeof detail - len, " P%u+0x%X: %08X vs %08X;", o / 0xA520 + 1, o % 0xA520, a, b);
             }
+            if (all.size() < 256) all.push_back({o, a, b});   // build 121: every value, for the first desync of a screen
             diffs++;
         }
         if (!diffs || m->frame == 1 || fresh) break;
-        if (g_ptrMapRecheckFrame != m->frame) { g_ptrMapRecheckFrame = m->frame; BuildPtrMapNow(); }
+        // build 121: the fresh map (a ~10 ms walk of the address space) only when a differing
+        // value could be a pointer at all; after a real desync it ran every 30 frames (stutter)
+        bool maybePtr = false;
+        for (auto& d : all) if (d.a >= 0x10000 && !(d.a & 3) && d.a < 0xFFFF0000u) { maybePtr = true; break; }
+        if (!maybePtr && diffs <= all.size()) break;
+        // and at most once per 300 frames (a map from a few seconds ago still knows nearly all memory)
+        if (g_ptrMapRecheckFrame != m->frame) {
+            if (g_ptrMapRecheckFrame != 0xFFFFFFFFu && m->frame > g_ptrMapRecheckFrame && m->frame - g_ptrMapRecheckFrame < 300) {
+                // reuse the map of that frame
+            } else { g_ptrMapRecheckFrame = m->frame; BuildPtrMapNow(); }
+        }
         fresh = true;
     }
     if (ptrs && N.fpFalse + N.desyncs < 40)
@@ -622,7 +668,23 @@ static void NetHandleRaw(const NRaw* m, int n) {
         if (N.fpFalse <= 20) Log("net:   frame %u block %u: same once pointers are left out (fine)", m->frame, m->blk);
         return;
     }
-    NetDesync(m->frame, "%u values of the character data differ in block %u:%s", diffs, m->blk, detail);
+    NetDesync(m->frame, "%u values of the character data differ in block %u%s%s", diffs, m->blk, detail[0] ? ":" : "", detail);
+    // build 121: the first character desync of each screen: every differing value of the block
+    // (the 18-19 Nov logs had only the first 4, and none after 10 desyncs), then the memory snapshot
+    static uint32_t fullFight = 0xFFFFFFFFu;
+    static uint32_t fullBlocks = 0;
+    if (fullFight != g_dlFight) { fullFight = g_dlFight; fullBlocks = 0; }
+    if (fullBlocks++ < 4) {
+        Log("net:   all differing values of frame %u block %u (this PC vs other PC):", m->frame, m->blk);
+        for (size_t i = 0; i < all.size(); i += 6) {
+            char buf[400]; int k = 0;
+            for (size_t j = i; j < all.size() && j < i + 6; j++)
+                k += snprintf(buf + k, sizeof buf - k, " P%u+0x%X: %08X vs %08X;", all[j].o / 0xA520 + 1, all[j].o % 0xA520, all[j].a, all[j].b);
+            Log("net:    %s", buf);
+        }
+        if (diffs > all.size()) Log("net:     (%u more)", diffs - (unsigned)all.size());
+    }
+    SnapPropose("character data");
 }
 static void NetFpFinalize() {
     if (!NetOn()) return;
@@ -898,7 +960,9 @@ static void NetEnd(const char* why) {
     g_netStall = false;
     NetStatus("offline (%s) - F4 to connect", why);
 }
+#include "desynclog.inc"           // build 121
 static void NetResetScreen() {
+    DlScreenStart();                  // build 121
     for (auto& x : N.rIn) x = NetIn();
     for (auto& x : N.lIn) x = NetIn();
     N.rIn[1].frame = 1;                   // frame 1 of every synced screen: no input on both sides
@@ -1112,11 +1176,18 @@ static void NetHandle(const uint8_t* p, int n) {
         break;
     }
     case M_PONG: {
-        if (n < (int)sizeof(NPing)) return;
-        uint32_t t = ((const NPing*)p)->t;
-        N.rtt = GetTickCount() - t;
+        if (n < (int)sizeof(NPing) || (h->flags & 2)) return;    // (an answer to an "I'm away" ping)
+        N.rtt = GetTickCount() - ((const NPing*)p)->t;   // (what the clock sync uses, unchanged)
+        PingGot(((const NPing*)p)->us);   // build 121: exact, for the log (desynclog.inc)
         break;
     }
+    case M_RCHK:                          // build 121
+        RchkHandle(p, n);
+        break;
+    case M_SNAP:
+    case M_SNAPH:
+        SnapHandle(p, n);
+        break;
     case M_BYE:
         NetEnd(h->flags == 1 ? "the other player closed the game" : "the other player left");
         break;
@@ -1384,11 +1455,14 @@ static NetAct NetBeforeInput() {
     N.gameTick = now;
     if (now - N.lastRecv > (uint32_t)g_ncfg.timeoutMs) { NetEnd("no packets from the other game for a while"); return NetAct::Free; }
     if (N.peerAwaySince && now - N.peerAwaySince > NET_AWAY_MS) { NetEnd("the other player switched away for too long"); return NetAct::Free; }
-    if (now - N.lastPing > 1000) {
+    // build 121: every 250 ms in a synced screen (ping and lost pings go into the log), else every second
+    if (now - N.lastPing > (N.synced ? 250u : 1000u)) {
         NPing m{};
         m.h = MakeHdr(M_PING);
         m.t = now;
+        m.us = NowUs32();
         NetSend(&m, sizeof m);
+        if (N.synced) PingSent();
         N.lastPing = now;
     }
     LobbyTick();
@@ -1560,7 +1634,7 @@ static void NetFill(uint32_t T) {
         // 107b: in the rematch's own synced screen, this player presses A (YES on the
         // game's box) every 16 frames instead; it goes to the other PC like any input
         g_postNav = raw0;
-        uint32_t s = T + ScreenDelay();
+        uint32_t s = T + InputDelayNow();
         raw0 = z == 2 && s % 16 < 2 ? 0x1000u : 0u;
         raw1 = 0;
     }
@@ -1577,12 +1651,17 @@ static void NetFill(uint32_t T) {
             N.diagFg = fg;
         }
     }
-    uint32_t s = T + ScreenDelay();
+    uint32_t s = T + InputDelayNow();
+    // build 121: when the delay goes up (rollback mode -> in step), the frames in between get
+    // this input too: a frame with no input would never be sent and the other game would wait forever
     if (s > N.lNewest) {
-        NetIn& x = N.lIn[s % 256];
-        x.frame = s;
-        x.v[0] = raw0;
-        x.v[1] = raw1;
+        uint32_t from = N.lNewest + 1 + 8 < s ? s - 8 : N.lNewest + 1;
+        for (uint32_t f = from; f <= s; f++) {
+            NetIn& x = N.lIn[f % 256];
+            x.frame = f;
+            x.v[0] = raw0;
+            x.v[1] = raw1;
+        }
         N.lNewest = s;
     }
     const NetIn& l = N.lIn[T % 256];
@@ -1657,9 +1736,12 @@ static void NetRbStarting(uint32_t F) {
 static void NetFrameEnd(void* scene) {
     if (N.st != NS_ON) return;
     NetFpFinalize();
-    if (NetRbMode() && g_frame % 600 == 0)
+    DlFrameEnd();                       // build 121
+    if (NetRbMode() && g_frame % 600 == 0) {
         Log("net: clock sync at frame %u: this PC %+.2f frames ahead, the other PC says %+.2f, together %+.2f; %u one-frame waits so far; rollbacks %u (deepest %u)",
             g_frame, N.aheadQ / 4.0, N.rAheadQ / 4.0, N.syncQ / 4.0, N.timeStalls, g_rbRollbacks, g_rbMaxDepth);
+        DlWindowLog();                  // build 121
+    }
     // Build 41: the check before rollback found a difference. A replay that
     // went another way may have changed memory outside the saved state, so
     // stop at once (test 40 went on and crashed) and stay in step without

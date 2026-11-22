@@ -12,6 +12,11 @@ namespace util {
 void LogOpen(const wchar_t* path);
 void Log(const char* fmt, ...);
 void LogClose();
+// Build 121: crash report file (crash_<date>_<time>.txt, 5 kept) with the last log lines
+void WriteCrashReport(const char* text);
+// Build 121: the last run did not close normally (crash or forced close); MarkCleanExit at a normal close
+bool PrevRunUnclean();
+void MarkCleanExit();
 
 // Folder our DLL lives in, with trailing backslash.
 const wchar_t* ModDir();

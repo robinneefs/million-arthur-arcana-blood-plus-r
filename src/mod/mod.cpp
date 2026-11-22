@@ -296,44 +296,69 @@ static void RandLogStats() {
         Log("    first run 0x%08X / replay 0x%08X  %u times", g_randMissPairs[i].first.ex, g_randMissPairs[i].first.got,
             g_randMissPairs[i].second);
 }
-// Build 77: rand trace for the first frames of each fight (test 76b: fight 3's
-// random numbers differed between the PCs by frame 31). Per frame: the seed at the
-// start, how many calls and from where. Both PCs log it; comparing the two logs
-// shows the first frame and the caller that went another way.
-static const uint32_t RT_N = 64, RT_MAXC = 256;
+// Build 77: rand trace (test 76b: fight 3's random numbers differed between the PCs by
+// frame 31). Per frame: the seed at the start, how many calls and from where. Both PCs
+// log it; comparing the two logs shows the first frame and the caller that went another way.
+// Build 121: a ring of the last 128 frames instead of only frames 0-63 (the 18-19 Nov
+// desyncs started mid-fight). A frame that is run again (rollback) overwrites its own
+// entry, so once its input is final the entry is the run both PCs should agree on.
+// Each entry also notes how often the frame ran and at which step it last ran (rollback
+// history). The online check (net_session.inc, M_RCHK) compares seed + shared-seed call
+// count of every final frame between the PCs and writes these entries around the first
+// frame that differs.
+static const uint32_t RT_N = 128, RT_MAXC = 192;
 static uint32_t g_rtRet[RT_N][RT_MAXC];
-static uint32_t g_rtCnt[RT_N], g_rtSeed[RT_N];
+static uint32_t g_rtFrame[RT_N], g_rtCnt[RT_N], g_rtOwn[RT_N], g_rtSeed[RT_N], g_rtSeedEnd[RT_N];
+static uint16_t g_rtRuns[RT_N];
+static uint32_t g_rtRunAt[RT_N];
 static int g_rtCur = -1;
-static bool g_rtDumped = false;
+static uint32_t g_stepRbTo = 0xFFFFFFFFu;   // build 121: frame the current step rolled back to (rollback history, desynclog.inc)
 static uint32_t g_rtLastFrame = 0;
-static void RandTraceReset() { memset(g_rtCnt, 0, sizeof g_rtCnt); memset(g_rtSeed, 0, sizeof g_rtSeed); g_rtCur = -1; g_rtDumped = false; }
+static void RandTraceReset() {
+    memset(g_rtFrame, 0xFF, sizeof g_rtFrame);
+    memset(g_rtCnt, 0, sizeof g_rtCnt); memset(g_rtOwn, 0, sizeof g_rtOwn);
+    memset(g_rtRuns, 0, sizeof g_rtRuns);
+    g_rtCur = -1;
+}
 static void RandTraceBegin(uint32_t f) {
     g_rtCur = -1;
     g_rtLastFrame = f;
-    if (f >= RT_N) return;
     SeedInit();
-    g_rtCur = (int)f; g_rtCnt[f] = 0; g_rtSeed[f] = t_seed;
+    uint32_t s = f % RT_N;
+    if (g_rtFrame[s] != f) { g_rtFrame[s] = f; g_rtRuns[s] = 0; }
+    if (g_rtRuns[s] < 0xFFFF) g_rtRuns[s]++;
+    g_rtRunAt[s] = g_frame;
+    g_rtCnt[s] = g_rtOwn[s] = 0;
+    g_rtSeed[s] = g_rtSeedEnd[s] = t_seed;
+    g_rtCur = (int)s;
 }
-static inline void RandTraceEnd() { g_rtCur = -1; }
+static inline void RandTraceEnd() { if (g_rtCur >= 0) g_rtSeedEnd[g_rtCur] = t_seed; g_rtCur = -1; }
 static uint32_t RtFrame() { return g_rtLastFrame; }
-static void RandTraceDump(const char* why) {
-    if (g_rtDumped) return;
-    g_rtDumped = true;
-    Log("  rand trace (build 80, %s): frame: seed at start, calls, callers (address x count)", why);
-    for (uint32_t f = 0; f < RT_N; f++) {
-        if (!g_rtCnt[f] && !g_rtSeed[f]) continue;
-        uint32_t n = g_rtCnt[f] < RT_MAXC ? g_rtCnt[f] : RT_MAXC;
-        uint32_t ua[24], uc[24], u = 0;
-        for (uint32_t i = 0; i < n; i++) {
-            uint32_t k = 0;
-            while (k < u && ua[k] != g_rtRet[f][i]) k++;
-            if (k == u) { if (u == 24) continue; ua[u] = g_rtRet[f][i]; uc[u] = 0; u++; }
-            uc[k]++;
-        }
-        char buf[600]; int m = snprintf(buf, sizeof buf, "    f%u: %08X, %u calls:", f, g_rtSeed[f], g_rtCnt[f]);
-        for (uint32_t k = 0; k < u && m < 560; k++) m += snprintf(buf + m, sizeof buf - m, (ua[k] & 0x80000000u) ? " %06X(own seed) x%u" : " %06X x%u", ua[k] & 0x7FFFFFFFu, uc[k]);
-        Log("%s", buf);
+// The entry of frame f (nullptr when the ring no longer has it).
+static bool RtHas(uint32_t f) { return g_rtFrame[f % RT_N] == f; }
+static uint32_t RtSeed(uint32_t f) { return g_rtSeed[f % RT_N]; }
+static uint32_t RtShared(uint32_t f) { uint32_t s = f % RT_N; return g_rtCnt[s] - g_rtOwn[s]; }
+// One line per frame: seed at start, calls (of them own seed), runs, callers (address x count).
+static void RandTraceLine(uint32_t f) {
+    uint32_t s = f % RT_N;
+    if (g_rtFrame[s] != f) { Log("    f%u: (no longer in the trace)", f); return; }
+    uint32_t n = g_rtCnt[s] < RT_MAXC ? g_rtCnt[s] : RT_MAXC;
+    uint32_t ua[24], uc[24], u = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t k = 0;
+        while (k < u && ua[k] != g_rtRet[s][i]) k++;
+        if (k == u) { if (u == 24) continue; ua[u] = g_rtRet[s][i]; uc[u] = 0; u++; }
+        uc[k]++;
     }
+    char buf[700]; int m = snprintf(buf, sizeof buf, "    f%u: seed %08X -> %08X, %u calls (%u own seed), ran %u time%s (last at step %u):",
+                                    f, g_rtSeed[s], g_rtSeedEnd[s], g_rtCnt[s], g_rtOwn[s], g_rtRuns[s], g_rtRuns[s] == 1 ? "" : "s", g_rtRunAt[s]);
+    for (uint32_t k = 0; k < u && m < 660; k++) m += snprintf(buf + m, sizeof buf - m, (ua[k] & 0x80000000u) ? " %06X(own seed) x%u" : " %06X x%u", ua[k] & 0x7FFFFFFFu, uc[k]);
+    if (g_rtCnt[s] > RT_MAXC && m < 680) snprintf(buf + m, sizeof buf - m, " (callers of the first %u calls only)", RT_MAXC);
+    Log("%s", buf);
+}
+static void RandTraceDumpRange(uint32_t from, uint32_t to, const char* why) {
+    Log("  rand trace (build 121, %s): frame: seed at start -> end, calls, how often it ran, callers (address x count)", why);
+    for (uint32_t f = from; f <= to; f++) RandTraceLine(f);
 }
 // build 80: the real caller of the game's rand wrapper 0x4C9260 (test 79a: the
 // first code-looking value on the stack was a stale local, 0x444E2C). The wrapper
@@ -345,8 +370,9 @@ static uint32_t RandRealCaller(const uint32_t* sp) {   // sp[0] = 0x4C9298
         bool helper = (ret >= 0x004C93C0 && ret < 0x004C9496) || (ret >= 0x004C94A0 && ret < 0x004C94D3) ||
                       (ret >= 0x004C9260 && ret < 0x004C93C0);
         if (!helper || ebp < 0x00010000 || (ebp & 3)) break;
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQuery((void*)ebp, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) break;
+        // build 121: the trace now runs every frame; the thread's own stack bounds instead of VirtualQuery
+        NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+        if (ebp < (uint32_t)tib->StackLimit || ebp + 8 > (uint32_t)tib->StackBase) break;
         uint32_t nebp = ((const uint32_t*)ebp)[0];
         ret = ((const uint32_t*)ebp)[1];
         ebp = nebp;
@@ -475,7 +501,7 @@ extern "C" int __attribute__((noinline)) __cdecl ModRand() {
             uint32_t who = RandRealCaller((const uint32_t*)((uint8_t*)__builtin_frame_address(0) + 8));
             for (int i = 0; i < g_cfg.ownSeedN; i++) if (who == g_cfg.ownSeed[i]) {
                 OwnSeedHit(who, (const uint32_t*)((uint8_t*)__builtin_frame_address(0) + 8));
-                if (g_rtCur >= 0) { uint32_t& c = g_rtCnt[g_rtCur]; if (c < RT_MAXC) g_rtRet[g_rtCur][c] = who | 0x80000000u; c++; }
+                if (g_rtCur >= 0) { uint32_t& c = g_rtCnt[g_rtCur]; if (c < RT_MAXC) g_rtRet[g_rtCur][c] = who | 0x80000000u; c++; g_rtOwn[g_rtCur]++; }
                 g_ownSeed = g_ownSeed * 214013u + 2531011u;
                 return static_cast<int>((g_ownSeed >> 16) & 0x7FFF);
             }
@@ -4139,9 +4165,11 @@ static void BuildFixedState() {
 
 static void BuildPtrMap(bool now);
 static bool NetOn();
+static void DlFightStart();          // build 121 (desynclog.inc)
 static bool SyncTestStart() {
     if (NetOn()) TimersAtFightStart();   // build 80: before the state is first saved
     RandTraceReset();
+    if (NetOn()) DlFightStart();
     g_ownSeedFightCalls = 0;
     g_ownSeed = 0x0BADF00Du;
     MemListLoad();                    // build 81 (first fight of the session)
@@ -4322,12 +4350,13 @@ static bool SyncTestStart() {
     return true;
 }
 
+static void NetFightSummary();      // build 121 (desynclog.inc)
 static void SyncTestStop(const char* why) {
+    if (g_mode == Mode::SyncTest && g_rbOn) NetFightSummary();
     Log("SYNC TEST stop (%s): %u frames tested, %u desynced, %u frames skipped, %u clock values missing in replay",
         why, g_testFrames, g_desyncs, g_skips, g_clockMiss);
     LogApiSites("Calls made by the game logic during update (sync test, includes replays)", g_testFrames);
     if (g_cfg.ownSeedN) Log("  own seed: %u rand calls this fight came from PC-dependent code (own seed)", g_ownSeedFightCalls);
-    if (NetOn()) RandTraceDump("fight end");
     g_mode = Mode::Idle;
     HwStop();
     if (g_rbOn) RbLogStats("end");
@@ -4743,6 +4772,7 @@ static uint32_t RbRollback(void* scene, uint32_t w, uint32_t F) {
         g_rbResim++;
     }
     uint32_t depth = F - w;
+    g_stepRbTo = w;                  // build 121
     g_rbRollbacks++;
     if (g_rbRollbacks <= 40) Log("  rollback at frame %u: back to frame %u (%u frames re-run)", F, w, depth);
     if (depth > g_rbMaxDepth) g_rbMaxDepth = depth;
@@ -5317,11 +5347,52 @@ static void DescribeAddr(uint32_t a, char* out, size_t n) {
         snprintf(out, n, "%08X(%ls+0x%X)", a, b ? b + 1 : name, a - (uint32_t)m);
     } else snprintf(out, n, "%08X", a);
 }
+// Build 121: a crash the game does not handle (the last stop before Windows closes the game):
+// write crash_<date>_<time>.txt with what crashed and the last 300 log lines (util.cpp).
+static LPTOP_LEVEL_EXCEPTION_FILTER g_prevCrashFilter = nullptr;
+static LONG WINAPI CrashReportFilter(EXCEPTION_POINTERS* e) {
+    static std::atomic<int> once{0};
+    if (once++ == 0) {
+        char text[2048];
+        char where[160];
+        uint32_t at = (uint32_t)e->ExceptionRecord->ExceptionAddress;
+        DescribeAddr(at, where, sizeof where);
+        CONTEXT* c = e->ContextRecord;
+        int n = snprintf(text, sizeof text,
+            "mod %s (build %u), game frame %u, mode %d, step %d\n"
+            "unhandled exception 0x%08lX at %s (thread %lu), address 0x%08X\n"
+            "eax=%08lX ecx=%08lX edx=%08lX ebx=%08lX esi=%08lX edi=%08lX ebp=%08lX esp=%08lX\n"
+            "stack code addresses:",
+            MOD_VERSION, MOD_BUILD, g_frame, (int)g_mode, g_stage, e->ExceptionRecord->ExceptionCode, where, GetCurrentThreadId(),
+            e->ExceptionRecord->NumberParameters > 1 ? (uint32_t)e->ExceptionRecord->ExceptionInformation[1] : 0,
+            c->Eax, c->Ecx, c->Edx, c->Ebx, c->Esi, c->Edi, c->Ebp, c->Esp);
+        uint32_t* sp = reinterpret_cast<uint32_t*>(c->Esp);
+        for (int i = 0, k = 0; i < 512 && k < 24 && n < (int)sizeof text - 40; i++) {
+            uint32_t v;
+            if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, 4, nullptr)) break;
+            if (v < 0x401000 || v >= 0x7FFF0000) continue;
+            MEMORY_BASIC_INFORMATION mbi;
+            if (!VirtualQuery((void*)v, &mbi, sizeof mbi) || mbi.Type != MEM_IMAGE || !(mbi.Protect & 0xF0)) continue;
+            char d[160];
+            DescribeAddr(v, d, sizeof d);
+            n += snprintf(text + n, sizeof text - n, " %s", d);
+            k++;
+        }
+        Log("CRASH (unhandled exception 0x%08lX at %s): writing a crash report file", e->ExceptionRecord->ExceptionCode, where);
+        util::WriteCrashReport(text);
+    }
+    return g_prevCrashFilter ? g_prevCrashFilter(e) : EXCEPTION_CONTINUE_SEARCH;
+}
+
 static DWORD WINAPI WatchdogThread(LPVOID) {
     uint32_t last = 0, still = 0;
     bool reported = false;
-    for (;;) {
+    for (uint32_t loops = 0;; loops++) {
         Sleep(500);
+        if (loops % 10 == 0) {   // build 121: keep our crash report filter first in line (other code may set its own later)
+            LPTOP_LEVEL_EXCEPTION_FILTER cur = SetUnhandledExceptionFilter(CrashReportFilter);
+            if (cur != CrashReportFilter && cur) { g_prevCrashFilter = cur; static int logs = 0; if (logs++ < 3) Log("crash reports: another crash handler was set (%p); ours now runs first and then calls it", (void*)cur); }
+        }
         uint32_t t = g_tick;
         if (t != last || g_mode == Mode::Idle || !g_gameTid) { last = t; still = 0; reported = false; continue; }
         if (++still < 6 || reported) continue;
@@ -5565,6 +5636,8 @@ static bool Install() {
 
 static DWORD WINAPI StartThread(LPVOID) {
     Log("Arcana Blood rollback mod, test build %u. Game pid %lu", NET_BUILD, GetCurrentProcessId());
+    if (util::PrevRunUnclean()) Log("note: the last game run did not close normally (it crashed or was closed by force); its log is rollback_log_previous.txt");
+    g_prevCrashFilter = SetUnhandledExceptionFilter(CrashReportFilter);   // build 121
     LoadSettings();
     Log("settings: profile_frames=%d depth=%d include_contested=%d heap=%d heap_restore=%d", g_cfg.profileFrames, g_cfg.depth,
         g_cfg.includeContested, g_cfg.heap, g_cfg.heapRestore);
@@ -5605,6 +5678,8 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
         _snwprintf(log, MAX_PATH, L"%lsrollback_log.txt", util::ModDir());
         util::LogOpen(log);
         CreateThread(nullptr, 0, StartThread, nullptr, 0, nullptr);
+    } else if (reason == DLL_PROCESS_DETACH) {
+        util::MarkCleanExit();       // build 121: a normal close (see util::LogOpen)
     }
     return TRUE;
 }

@@ -1,0 +1,1 @@
+miniz 3.0.2 from https://github.com/richgel999/miniz/releases/tag/3.0.2 (miniz.c, miniz.h; LICENSE: MIT). Used for the deflate in Pack logs (build 121).

@@ -14,30 +14,101 @@ void SetModDir(HMODULE self) {
 
 const wchar_t* ModDir() { return g_modDir; }
 
+// Build 121: the last lines of the log, for crash reports (WriteCrashReport).
+static const int TAIL_N = 300, TAIL_LEN = 400;
+static char g_tail[TAIL_N][TAIL_LEN];
+static int g_tailNext = 0, g_tailCount = 0;
+static bool g_prevUnclean = false;
+
 void LogOpen(const wchar_t* path) {
     InitializeCriticalSection(&g_logLock);
     // Build 89: keep the last session's log (a crash log survives a restart).
-    wchar_t prev[MAX_PATH];
-    wcsncpy(prev, path, MAX_PATH - 1); prev[MAX_PATH - 1] = 0;
-    wchar_t* dot = wcsrchr(prev, L'.');
-    if (dot && (size_t)(dot - prev) + 16 < MAX_PATH) {
-        wcscpy(dot, L"_previous.txt");
-        MoveFileExW(path, prev, MOVEFILE_REPLACE_EXISTING);
+    // Build 121: the last 5 runs: rollback_log.txt, _previous.txt, _previous2.txt .. _previous4.txt
+    wchar_t base[MAX_PATH];
+    wcsncpy(base, path, MAX_PATH - 1); base[MAX_PATH - 1] = 0;
+    wchar_t* dot = wcsrchr(base, L'.');
+    if (dot && (size_t)(dot - base) + 20 < MAX_PATH) {
+        *dot = 0;
+        wchar_t from[MAX_PATH], to[MAX_PATH];
+        for (int i = 4; i >= 1; i--) {
+            if (i == 1) _snwprintf(from, MAX_PATH, L"%ls.txt", base);
+            else if (i == 2) _snwprintf(from, MAX_PATH, L"%ls_previous.txt", base);
+            else _snwprintf(from, MAX_PATH, L"%ls_previous%d.txt", base, i - 1);
+            if (i == 1) _snwprintf(to, MAX_PATH, L"%ls_previous.txt", base);
+            else _snwprintf(to, MAX_PATH, L"%ls_previous%d.txt", base, i);
+            MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING);
+        }
     }
     g_log = _wfopen(path, L"w");
+    // Build 121: a flag file that only a normal close removes (DllMain): if it is still there,
+    // the last run crashed or was closed by force.
+    wchar_t flag[MAX_PATH];
+    _snwprintf(flag, MAX_PATH, L"%lsrollback_running.flag", g_modDir);
+    g_prevUnclean = GetFileAttributesW(flag) != INVALID_FILE_ATTRIBUTES;
+    HANDLE f = CreateFileW(flag, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+}
+bool PrevRunUnclean() { return g_prevUnclean; }
+void MarkCleanExit() {
+    wchar_t flag[MAX_PATH];
+    _snwprintf(flag, MAX_PATH, L"%lsrollback_running.flag", g_modDir);
+    DeleteFileW(flag);
 }
 
 void Log(const char* fmt, ...) {
     if (!g_log) return;
     EnterCriticalSection(&g_logLock);
     SYSTEMTIME t; GetLocalTime(&t);
-    fprintf(g_log, "[%02d:%02d:%02d.%03d] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    char line[8192];
+    int n = snprintf(line, sizeof line, "[%02d:%02d:%02d.%03d] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
     va_list ap; va_start(ap, fmt);
-    vfprintf(g_log, fmt, ap);
+    vsnprintf(line + n, sizeof line - n, fmt, ap);
     va_end(ap);
+    fputs(line, g_log);
     fputc('\n', g_log);
     fflush(g_log);
+    strncpy(g_tail[g_tailNext], line, TAIL_LEN - 1);
+    g_tail[g_tailNext][TAIL_LEN - 1] = 0;
+    g_tailNext = (g_tailNext + 1) % TAIL_N;
+    if (g_tailCount < TAIL_N) g_tailCount++;
     LeaveCriticalSection(&g_logLock);
+}
+
+// Build 121: crash_<date>_<time>.txt next to the mod: what happened plus the last 300 log
+// lines. Only the 5 newest are kept. Pack logs takes them with the logs.
+void WriteCrashReport(const char* text) {
+    wchar_t pat[MAX_PATH];
+    _snwprintf(pat, MAX_PATH, L"%lscrash_*.txt", g_modDir);
+    WIN32_FIND_DATAW fd;
+    wchar_t names[64][MAX_PATH];
+    int n = 0;
+    HANDLE h = FindFirstFileW(pat, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do { if (n < 64) { wcsncpy(names[n], fd.cFileName, MAX_PATH - 1); names[n][MAX_PATH - 1] = 0; n++; } } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    // oldest first (names hold the date and time), keep 4 + this one
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+            if (wcscmp(names[j], names[i]) < 0) { wchar_t tmp[MAX_PATH]; wcscpy(tmp, names[i]); wcscpy(names[i], names[j]); wcscpy(names[j], tmp); }
+    for (int i = 0; i + 4 < n; i++) {
+        wchar_t p[MAX_PATH];
+        _snwprintf(p, MAX_PATH, L"%ls%ls", g_modDir, names[i]);
+        DeleteFileW(p);
+    }
+    SYSTEMTIME t; GetLocalTime(&t);
+    wchar_t path[MAX_PATH];
+    _snwprintf(path, MAX_PATH, L"%lscrash_%04d-%02d-%02d_%02d%02d%02d.txt", g_modDir, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    FILE* f = _wfopen(path, L"w");
+    if (!f) return;
+    fprintf(f, "Arcana Blood +R crash report\n%s\n\nLast %d lines of rollback_log.txt:\n", text, g_tailCount);
+    // no lock: the crashing thread may hold it; the lines are only read
+    for (int i = 0; i < g_tailCount; i++) {
+        int k = (g_tailNext - g_tailCount + i + TAIL_N) % TAIL_N;
+        fputs(g_tail[k], f);
+        fputc('\n', f);
+    }
+    fclose(f);
 }
 
 void LogClose() {
