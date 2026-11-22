@@ -5,7 +5,7 @@
 //             button), vibration, and a button check pop-up showing what the game reads
 //   SOUND     the game's music / sound effects / voices volume, our menu sounds and music
 //   DISPLAY   the game's display options (resolution, mode, V-Sync; after a restart)
-//   ONLINE    the Steam name, input delay, connection info in a match
+//   ONLINE    the Steam name, connection info in a match (build 122: input delay is in My setup)
 //   LOGS      pack the logs into one zip on the Desktop, open the folder, version
 // The game's settings are reached through gamecfg.inc and written to its save when you leave.
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ static const StAction ST_ACT[8] = {{"Weak Attack", gcfg::S_A, "A"},  {"Medium At
                                    {"Burst", gcfg::S_AD, "abcD"},       {"Enchant Boost", gcfg::S_ABC, "ABC"}};
 // build 120: Button check right below the buttons, Vibration below it (up/down reaches both)
 static const int ST_NACT = 8, ST_ROW_CHECK = 8, ST_ROW_VIB = 9;
-static const int ST_ROWS[5] = {10, 5, 3, 2, 2};
+static const int ST_ROWS[5] = {10, 5, 3, 1, 2};   // build 122: input delay moved to My setup
 
 static struct {
     bool loaded = false, dirty = false;
@@ -371,19 +371,7 @@ static void StChange(int dx) {
         ST.dirty = true;
         MM_SND |= 1;
     } else if (ST.tab == 3) {
-        if (r == 0) {
-            int d = dx ? dx : 1;
-            ST.delay = (ST.delay + d + 9) % 9;
-#ifndef UI_HARNESS
-            g_ncfg.delay = ST.delay;
-            wchar_t ini[MAX_PATH], w[8];
-            _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
-            _snwprintf(w, 8, L"%d", ST.delay);
-            WritePrivateProfileStringW(L"net", L"input_delay", w, ini);
-            Log("settings: input delay %d", ST.delay);
-#endif
-            MM_SND |= 1;
-        } else { g_netInfo = !g_netInfo.load(); MmSavePref(L"connection_info", g_netInfo); MM_SND |= 2; }
+        g_netInfo = !g_netInfo.load(); MmSavePref(L"connection_info", g_netInfo); MM_SND |= 2;
     } else {
         if (dx) return;
         if (r == 0) logpack::Start(); else logpack::OpenFolder();
@@ -571,16 +559,14 @@ static void MmSettingsFrame() {
         const char* sn = net::SteamMyName();
         float nw = MmText(dl, g_fUiBold, 28, X0 + 520, Y0 + 110, MmC(sn[0] ? P.text : P.faint), sn[0] ? sn : "Steam isn't running");
         MmText(dl, g_fMenu, 13, X0 + 540 + nw, Y0 + 112, MmC(P.faint), "FROM STEAM");
-        if (rowHit(0, X0 + 30, Y0 + 175, X1 - 30, Y0 + 265)) StChange(io.MousePos.x < CP(X0 + 670, 0).x ? -1 : 1);
-        StRow(dl, X0 + 30, X1 - 30, Y0 + 220, "Input delay", SR == 0, T.pulse, "Higher = fewer rollbacks, less snappy");
-        char d[24];
-        snprintf(d, sizeof d, ST.delay == 1 ? "%d frame" : "%d frames", ST.delay);
-        StChoice(dl, X0 + 520, X0 + 820, Y0 + 220, d, SR == 0);
-        MmText(dl, g_fUi, 21, X0 + 850, Y0 + 206, MmC(P.faint), "2 suits most connections.");
-        MmText(dl, g_fUi, 21, X0 + 850, Y0 + 234, MmC(P.faint), "Each player picks their own.");
-        if (rowHit(1, X0 + 30, Y0 + 285, X1 - 30, Y0 + 375)) StChange(0);
-        StRow(dl, X0 + 30, X1 - 30, Y0 + 330, "Connection info in a match", SR == 1, T.pulse, "Ping and rollback frames in a corner");
-        StToggle(dl, X0 + 520, Y0 + 330, g_netInfo);
+        if (rowHit(0, X0 + 30, Y0 + 175, X1 - 30, Y0 + 265)) StChange(0);
+        StRow(dl, X0 + 30, X1 - 30, Y0 + 220, "Connection info in a match", SR == 0, T.pulse, "Ping and rollback frames in a corner");
+        StToggle(dl, X0 + 520, Y0 + 220, g_netInfo);
+        // build 122: the input delay is set in My setup now (it can change between matches in a room)
+        MmLine(dl, X0 + 50, Y0 + 300, X1 - X0 - 100, 1, MmC(P.acc, 0.6f));
+        char dd[96];
+        snprintf(dd, sizeof dd, "Input delay: %d %s. You set it in My setup.", ST.delay, ST.delay == 1 ? "frame" : "frames");
+        MmText(dl, g_fUi, 24, X0 + 50, Y0 + 344, MmC(P.dim), dd);
     } else {
         MmSection(dl, X0, Y0, X1, Y1, "LOGS");
         MmText(dl, g_fUi, 26, X0 + 50, Y0 + 90, MmC(P.text), "Something went wrong? Pack the logs into one file and send it along.");
@@ -611,7 +597,7 @@ static void MmSettingsFrame() {
     dl->PopClipRect();
     static const char* help[5] = {"Pick an action and press A, then the button or key you want. One that's taken swaps places.",
                                   "Left / right changes the volume.", "Left / right changes the setting. It is used the next time the game starts.",
-                                  "Your own input delay. The other player picks theirs.", "Pack the logs when you report a problem."};
+                                  "Shows ping and rollback frames in a corner during a match.", "Pack the logs when you report a problem."};
     const char* h = ST.focus ? help[ST.tab] : "Pick a tab and press A.";
     if (ST.listen >= 0) h = ST.listenCol ? "Press the key you want. Esc keeps the old one." : "Press the button you want. Wait 4 seconds to keep the old one.";
     MmText(dl, g_fUi, 26, 60, 994, MmC(P.text), h);

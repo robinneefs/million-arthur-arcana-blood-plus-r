@@ -352,7 +352,8 @@ static void LobbyTick() {
     if (LB.leaveNow) leave = true;
     // ---- the rules (same on both PCs) ----
     if (LB.haveThem && !leave) {
-        if (!host && them.delay != me.delay) { me.delay = them.delay; }      // player 1's settings
+        // build 122: no longer copied from player 1: each player plays with their own input delay
+        me.delay = (uint8_t)g_ncfg.delay;
         if (!host && them.rounds != me.rounds) { me.rounds = them.rounds; }
         if (!host && them.timer != me.timer) { me.timer = them.timer; }
         switch (me.phase) {

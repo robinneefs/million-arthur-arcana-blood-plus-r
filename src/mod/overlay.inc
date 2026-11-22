@@ -248,14 +248,7 @@ static void UiGameThreadTick(bool focused) {
     if (g_closeReq.load() && N.st != NS_OFF) { g_byeClosing = true; NetEnd("you closed the game"); }   // build 111: asked by the window thread
     if (NetOn()) {
         if (U.controller >= 0) N.localDev = (uint32_t)U.controller;
-        // player 1's input delay, between screens only
-        EnterCriticalSection(&g_lobbyLock);
-        uint8_t d = LB.me.delay;
-        LeaveCriticalSection(&g_lobbyLock);
-        if (!N.syncedType && d <= 8 && (int)d != g_ncfg.delay) {
-            Log("ui: input delay now %u (set by player 1)", d);
-            g_ncfg.delay = d;
-        }
+        // build 122: the guest no longer takes player 1's input delay (each player has their own)
     }
 }
 

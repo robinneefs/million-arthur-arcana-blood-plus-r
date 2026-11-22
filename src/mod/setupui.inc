@@ -59,7 +59,7 @@ static int SuHearts(int hp) {
 struct SuPreset { char name[24]; int a[3]; };
 static struct {
     bool loaded = false;
-    int sec = 0;                    // 0 character, 1 colour, 2 stage, 3 presets
+    int sec = 0;                    // 0 character, 1 colour, 2 stage, 3 presets, 4 input delay (build 122)
     int chara = 2, color = 0, stage = 0, inUse = 0;   // chara / stage: SU_RANDOM = random
     int charCur = 2, presetCur = 0;
     int pick = -1;                  // assist picker: slot being changed (0-2), -1 closed
@@ -308,6 +308,29 @@ static void SuStageMove(int dx, int dy) {   // 5 + 4 cards, the last one = rando
     SU.stage = c >= SU_NSTAGE ? SU_RANDOM : c;
     SU.dirty = true;
 }
+// Build 122: each player's own input delay (rollback.ini [net] input_delay), here so it can be
+// changed between matches in a room. A change counts from the next match (the netcode locks the
+// delay at the start of each screen).
+static int SuDelay() {
+#ifndef UI_HARNESS
+    return g_ncfg.delay;
+#else
+    return 2;
+#endif
+}
+static void SuDelayChange(int dx) {
+#ifndef UI_HARNESS
+    int d = g_ncfg.delay + dx;
+    if (d < 0 || d > 8) return;
+    g_ncfg.delay = d;
+    wchar_t ini[MAX_PATH], w[8];
+    SuIniPath(ini);
+    _snwprintf(w, 8, L"%d", d);
+    WritePrivateProfileStringW(L"net", L"input_delay", w, ini);
+    Log("setup: input delay %d (from the next match)", d);
+#endif
+    MM_SND |= 1;
+}
 static void SuPutAssist(int slot, int a) {
     SuPreset& p = SU.p[SU.presetCur];
     for (int k = 0; k < 3; k++)
@@ -355,9 +378,11 @@ static void MmSetupFrame() {
         }
     } else {
         if (nav.b) { SuLeave(); return; }
-        if (nav.lb) { SU.sec = (SU.sec + 3) % 4; MM_SND |= 1; }
-        if (nav.rb) { SU.sec = (SU.sec + 1) % 4; MM_SND |= 1; }
-        if (nav.dx || nav.dy) {
+        if (nav.lb) { SU.sec = (SU.sec + 4) % 5; MM_SND |= 1; }
+        if (nav.rb) { SU.sec = (SU.sec + 1) % 5; MM_SND |= 1; }
+        if (SU.sec == 4 && (nav.dx || nav.dy)) {     // build 122: left / right changes the delay
+            if (nav.dx) SuDelayChange(nav.dx);
+        } else if (nav.dx || nav.dy) {
             MM_SND |= 1;
             if (SU.sec == 0) SuCharMove(nav.dx, nav.dy);
             else if (SU.sec == 1) SuColorMove(nav.dx, nav.dy);
@@ -367,7 +392,8 @@ static void MmSetupFrame() {
         }
         if (nav.a) {
             MM_SND |= 2;
-            if (SU.sec < 3) SU.sec++;                       // picked: on to the next part
+            if (SU.sec == 4) SU.sec = 3;                    // build 122: the delay row, then the presets
+            else if (SU.sec < 3) SU.sec++;                  // picked: on to the next part
             else if (SU.inUse != SU.presetCur) { SU.inUse = SU.presetCur; SU.dirty = true; }   // build 103: A uses the preset
         }
         if (SU.sec == 3 && nav.x) { SU.pick = 0; SU.pickSel = SU.p[SU.presetCur].a[0]; MM_SND |= 2; }   // build 103: X edits it
@@ -432,7 +458,7 @@ static void MmSetupFrame() {
     {
         float x0 = 800, x1 = 1400;   // build 120h: wider; the presets column needed less room
         MmSection(dl, x0, 170, x1, 940, "PREVIEW");
-        float sx0 = x0 + 16, sx1 = x1 - 16, sy0 = 186, sy1 = 680;
+        float sx0 = x0 + 16, sx1 = x1 - 16, sy0 = 186, sy1 = 600;   // build 122: 80 px less, for the input delay row
         dl->PushClipRect(CP(sx0, sy0), CP(sx1, sy1), true);
         float bh = sy1 - sy0, bw = bh * 723.0f / 460.0f;
         MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, (sx0 + sx1) / 2 - bw / 2, sy0, bw, bh, MmRGBA(255, 255, 255, 0.9f));
@@ -451,7 +477,7 @@ static void MmSetupFrame() {
         }
         dl->PopClipRect();
         dl->AddRect(CP(sx0, sy0), CP(sx1, sy1), MmC(P.gold, 0.6f), CV(3), 0, CV(1.5f));
-        float y = 718;
+        float y = 638;
         const char* nm = SU.chara == SU_RANDOM ? "Random character" : SU_CHARS[SU.chara];
         MmText(dl, g_fUiBold, strlen(nm) > 22 ? 28.0f : 34.0f, (x0 + x1) / 2, y, MmC(P.text), nm, 1, 2, MmC(P.ink));
         char s2[64];
@@ -466,6 +492,27 @@ static void MmSetupFrame() {
             float bx = x0 + 30 + k * (kw + 12), by = y + 114;
             MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(SU.p[SU.inUse].a[k]), bx, by, kw, kh);
             dl->AddRect(CP(bx, by), CP(bx + kw, by + kh), MmC(P.gold, 0.7f), CV(3), 0, CV(1.5f));
+        }
+        // build 122: your own input delay (counts from the next match)
+        {
+            float ry0 = 852, ry1 = 926;
+            secFrame(4, x0 + 14, ry0, x1 - 14, ry1);
+            MmLine(dl, x0 + 30, ry0 - 8, x1 - x0 - 60, 1, MmC(P.acc, 0.6f));
+            MmText(dl, g_fMenu, 13, x0 + 30, ry0 + 22, SU.sec == 4 ? MmC(P.gold) : MmC(P.faint), "INPUT DELAY");
+            MmText(dl, g_fUi, 19, x0 + 30, ry0 + 52, MmC(P.faint), "Your screen only. Counts from the next match.");
+            int d = SuDelay();
+            char dv[24]; snprintf(dv, sizeof dv, d == 1 ? "%d frame" : "%d frames", d);
+            float vx = x1 - 140;
+            bool on = SU.sec == 4 && SU.pick < 0;
+            MmText(dl, g_fUiBold, 28, vx, ry0 + 36, on ? MmC(P.gold) : MmC(P.text), dv, 1);
+            MmText(dl, g_fUiBold, 28, vx - 100, ry0 + 36, d > 0 ? MmC(on ? P.gold : P.dim) : MmC(P.faint, 0.3f), "<", 1);
+            MmText(dl, g_fUiBold, 28, vx + 100, ry0 + 36, d < 8 ? MmC(on ? P.gold : P.dim) : MmC(P.faint, 0.3f), ">", 1);
+            if (mouseOk && MmHover(x0 + 14, ry0, x1 - 14, ry1)) {
+                SU.sec = 4;
+                if (MmHover(vx - 130, ry0, vx - 40, ry1)) SuDelayChange(-1);
+                else if (MmHover(vx + 40, ry0, vx + 130, ry1)) SuDelayChange(1);
+                else MM_SND |= 1;
+            }
         }
     }
 
@@ -557,9 +604,10 @@ static void MmSetupFrame() {
         MmLine(dl, -g_cvO.x / g_cv, 960, g_disp.x / g_cv, 3, MmC(P.acc, 0.95f));
         MmLine(dl, -g_cvO.x / g_cv, 964, g_disp.x / g_cv, 1, MmC(P.gold, 0.6f));
         dl->PopClipRect();
-        static const char* help[4] = {"Pick the character you play with.", "Pick a colour. The preview shows it on your character.",
+        static const char* help[5] = {"Pick the character you play with.", "Pick a colour. The preview shows it on your character.",
                                       "Your stage pick. In a match it's random between both players' picks.",
-                                      "A uses this preset in your matches, X edits its Support Knights, Y renames it."};
+                                      "A uses this preset in your matches, X edits its Support Knights, Y renames it.",
+                                      "Higher = fewer rollbacks on your screen, but later inputs. Each player picks their own."};
         MmText(dl, g_fUi, 26, 60, 994, MmC(P.text), SU.rename >= 0 ? "Type a name with the keyboard, then press Enter." : help[SU.sec]);
         float x = 60;
         MmPadButton(dl, x, 1022, 'A', MmRGBA(40, 160, 70)); MmText(dl, g_fMenu, 13, x + 44, 1040, MmC(P.text), SU.sec == 3 ? "Use" : "Next"); x += 150;

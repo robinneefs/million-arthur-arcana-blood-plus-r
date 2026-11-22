@@ -21,7 +21,7 @@
 enum : uint8_t { M_HELLO = 1, M_INPUT = 2, M_FP = 3, M_RAW = 4, M_PING = 5, M_PONG = 6, M_BYE = 7, M_SURV = 8, M_SPAGE = 9, M_SAVE = 10, M_SAVEACK = 11,
                  M_LOBBY = 12, M_START = 13, M_STARTACK = 14 };   // build 57: lobby.inc
 static const uint32_t NET_MAGIC = 0x33425241;   // "ARB3"
-static const uint32_t NET_PROTO = 1, NET_BUILD = MOD_BUILD;
+static const uint32_t NET_PROTO = 2, NET_BUILD = MOD_BUILD;   // build 122: 2 = per-player input delay (delay in every input packet, clock sync aims for the delay difference)
 // Build 57: lobby and match setup (lobby.inc) and the overlay (overlay.inc)
 static void LbHandle(const uint8_t* p, int n);
 static void LobbyTick();
@@ -49,7 +49,8 @@ struct NHello {
     char name[32];
 };
 // Build 57: ahead = how many quarter frames the sender thinks it runs ahead of the receiver (clock sync)
-struct NInput { NHdr h; uint32_t sceneVt, first, ack, cur; uint8_t count; int8_t ahead; uint8_t pad[2]; uint32_t in[32][2]; };
+// Build 122: delay1 = the sender's own input delay for this screen + 1 (0 = not known)
+struct NInput { NHdr h; uint32_t sceneVt, first, ack, cur; uint8_t count; int8_t ahead; uint8_t delay1, pad; uint32_t in[32][2]; };
 struct NFp { NHdr h; uint32_t frame, seed; uint16_t nblk, pad; uint32_t hash[FP_NBLK]; };
 struct NRaw { NHdr h; uint32_t frame; uint16_t blk, len; uint32_t mask[8]; uint8_t data[FP_BLK]; };
 struct NPing { NHdr h; uint32_t t; uint32_t us; };   // build 121: us = send time in microseconds (ping log); t as before
@@ -69,6 +70,7 @@ struct NetCfg {
     int lanPort = 7845;
     uint64_t steamFriend = 0;
     int loopLag = 3, loopJitter = 1, loopLoss = 5, loopMirror = 1, loopTestDesync = 0;
+    int loopDelay = -1;           // build 122: the stand-in's own input delay (-1 = the same as yours)
     int timeoutMs = 8000;
     int survey = 0;               // build 46: compare memory with the other PC at each screen start
     int syncSave = 1;             // build 48: player 2 uses player 1's saved data while connected
@@ -115,6 +117,10 @@ static struct NetS {
     // the other game
     uint16_t rEpoch = 0;
     uint32_t rSceneVt = 0, rCur = 0, rAck = 1;
+    // build 122: input delays for the current screen, locked at its start (a change in My
+    // setup counts from the next screen); rDelay = the other player's, 0xFF until their packet says
+    uint8_t myDelay = 2, rDelay = 0xFF;
+    uint32_t timeStallsAtStart = 0;     // one-frame waits before this screen (log of the first 300 fight frames)
     NetIn rIn[256];
     uint32_t rContig = 2, rMax = 1;     // frames < rContig all known
     NetIn lIn[256];
@@ -190,6 +196,8 @@ static void LoadNetSettings() {
     GetPrivateProfileStringW(L"net", L"steam_friend", L"", w, 64, ini);
     g_ncfg.steamFriend = _wcstoui64(w, nullptr, 10);
     g_ncfg.loopLag = GetPrivateProfileIntW(L"net", L"loopback_lag_frames", 3, ini);
+    g_ncfg.loopDelay = GetPrivateProfileIntW(L"net", L"loopback_delay", -1, ini);
+    if (g_ncfg.loopDelay > 8) g_ncfg.loopDelay = 8;
     g_ncfg.loopJitter = GetPrivateProfileIntW(L"net", L"loopback_jitter_frames", 1, ini);
     g_ncfg.loopLoss = GetPrivateProfileIntW(L"net", L"loopback_loss_percent", 5, ini);
     GetPrivateProfileStringW(L"net", L"loopback_other_player", L"mirror", w, 64, ini);
@@ -232,8 +240,17 @@ static uint32_t InputDelayNow() {
 // Menus wait for every input, so they get a bit more input delay (smoother
 // with lag, and nobody notices 4 frames in a menu). Fights use input_delay.
 static uint32_t ScreenDelay() {
-    if (N.sceneVt == SCENE_BTL) return (uint32_t)g_ncfg.delay;
-    return g_ncfg.delay > 4 ? (uint32_t)g_ncfg.delay : 4u;
+    uint32_t d = N.myDelay;              // build 122: this player's own delay, locked for the screen
+    if (N.sceneVt == SCENE_BTL) return d;
+    return d > 4 ? d : 4u;
+}
+// Build 122 (per-player delay): "your own delay protects your own screen". Your rollbacks are
+// the connection minus YOUR delay, so the game with the lower delay runs ahead of the other by
+// the difference. This is how many frames this PC aims to run ahead (negative = behind), in
+// quarter frames. Fights only (menus and the loading screen run in step).
+static int ClockTargetQ() {
+    if (N.sceneVt != SCENE_BTL || N.rDelay > 8) return 0;
+    return ((int)N.rDelay - (int)N.myDelay) * 4;
 }
 // The top scene is "game main" the whole time; the real screen (title,
 // character select, fight, ...) is its child object at +0x28 (test 39).
@@ -281,6 +298,13 @@ static void LoopQueue(std::vector<LPkt>& q, const void* p, int n) {
 // player's input for a frame is decided when that game would sample it
 // (its frame minus the input delay), and copies the newest input of yours
 // it has seen by then (or nothing, with loopback_other_player=idle).
+// Build 122: the stand-in's own input delay (loopback_delay=, -1 = yours), menus at least 4 like ours
+static uint32_t LoopFightDelay() { return g_ncfg.loopDelay < 0 ? N.myDelay : (uint32_t)g_ncfg.loopDelay; }
+static uint32_t LoopScreenDelay() {
+    uint32_t d = LoopFightDelay();
+    if (N.sceneVt == SCENE_BTL) return d;
+    return d > 4 ? d : 4u;
+}
 static struct LoopPeer {
     uint16_t epoch = 0xFFFF;
     NetIn in[256];          // the frames it got from us
@@ -312,7 +336,7 @@ static void LoopPeerHandle(const uint8_t* p, int n) {
             g_lp.contig = 2;
             g_lp.ownNewest = 1;
             g_lp.last[0] = g_lp.last[1] = 0;
-            for (uint32_t f = 2; f <= ScreenDelay(); f++) { g_lp.own[f].frame = f; g_lp.ownNewest = f; }
+            for (uint32_t f = 2; f <= LoopScreenDelay(); f++) { g_lp.own[f].frame = f; g_lp.ownNewest = f; }
         }
         for (uint32_t i = 0; i < m->count; i++) {
             uint32_t f = m->first + i;
@@ -326,9 +350,14 @@ static void LoopPeerHandle(const uint8_t* p, int n) {
             g_lp.last[1] = g_lp.in[g_lp.contig % 256].v[1];
             g_lp.contig++;
         }
-        uint32_t peerFrame = m->cur + (uint32_t)g_ncfg.loopLag;      // where the stand-in's game would be now
+        // where the stand-in's game would be now; build 122: in fights a stand-in with the higher
+        // delay runs behind by the difference (and one with the lower delay ahead), like a real PC
+        uint32_t sd = LoopScreenDelay();
+        int offF = N.sceneVt == SCENE_BTL ? (int)sd - (int)N.myDelay : 0;
+        int pf = (int)m->cur + g_ncfg.loopLag - offF;
+        uint32_t peerFrame = pf < 1 ? 1u : (uint32_t)pf;
         if (m->sceneVt) {
-            uint32_t target = peerFrame + InputDelayNow();
+            uint32_t target = peerFrame + (sd == 0 && !NetRbMode() ? 1u : sd);
             if (target > g_lp.ownNewest + 200) target = g_lp.ownNewest + 200;
             for (uint32_t f = g_lp.ownNewest + 1; f <= target; f++) {
                 NetIn& o = g_lp.own[f % 256];
@@ -343,6 +372,7 @@ static void LoopPeerHandle(const uint8_t* p, int n) {
         r.sceneVt = m->sceneVt;
         r.ack = g_lp.contig - 1;
         r.cur = peerFrame;
+        r.delay1 = (uint8_t)(LoopFightDelay() + 1);
         r.first = m->ack + 1 < 2 ? 2 : m->ack + 1;
         uint32_t cnt = 0;
         while (m->sceneVt && cnt < 32 && r.first + cnt <= g_lp.ownNewest) {
@@ -962,6 +992,9 @@ static void NetEnd(const char* why) {
 }
 #include "desynclog.inc"           // build 121
 static void NetResetScreen() {
+    N.myDelay = (uint8_t)(g_ncfg.delay < 0 ? 0 : g_ncfg.delay > 8 ? 8 : g_ncfg.delay);   // build 122: locked for this screen
+    N.rDelay = 0xFF;
+    N.timeStallsAtStart = N.timeStalls;
     DlScreenStart();                  // build 121
     for (auto& x : N.rIn) x = NetIn();
     for (auto& x : N.lIn) x = NetIn();
@@ -1132,6 +1165,10 @@ static void NetHandle(const uint8_t* p, int n) {
         if (m->h.epoch != N.epoch) return;
         N.rCur = m->cur;
         N.rAheadQ = m->ahead;
+        if (m->delay1 && m->delay1 <= 9 && N.rDelay != m->delay1 - 1) {    // build 122
+            N.rDelay = (uint8_t)(m->delay1 - 1);
+            Log("net: screen %u: the other player's input delay is %u (yours %u)", N.epoch, N.rDelay, N.myDelay);
+        }
         if (m->ack > N.rAck && m->ack <= N.lNewest) N.rAck = m->ack;
         for (uint32_t i = 0; i < m->count; i++) {
             uint32_t f = m->first + i;
@@ -1217,6 +1254,7 @@ static void NetSendInput() {
     m.ack = N.rContig - 1;
     m.cur = g_frame;
     m.ahead = (int8_t)(N.aheadQ > 127 ? 127 : N.aheadQ < -127 ? -127 : N.aheadQ);
+    m.delay1 = (uint8_t)(N.myDelay + 1);                   // build 122
     m.first = N.rAck + 1 < 2 ? 2 : N.rAck + 1;
     uint32_t cnt = 0;
     if (N.syncedType)
@@ -1545,6 +1583,19 @@ static NetAct NetBeforeInput() {
         // both start from the same menu input state: what each PC's pads held on
         // the screen before (held keys, key-repeat timers) is cleared.
         ClearMenuInputState();
+        if (N.sceneVt == SCENE_BTL) {
+            // Build 122: with different delays the lower-delay game runs ahead by the difference
+            // (ClockTargetQ). Both start frame 1 together, so the higher-delay PC waits for the
+            // difference once, here (both games were just waiting for each other anyway), instead
+            // of the clock sync closing the gap later with one-frame waits you can see. The game
+            // ahead runs those frames on our first frames' input, which were sent before (no input).
+            int behind = N.rDelay <= 8 ? (int)N.myDelay - (int)N.rDelay : 0;
+            char rd[16];
+            if (N.rDelay <= 8) snprintf(rd, sizeof rd, "%u", N.rDelay); else snprintf(rd, sizeof rd, "not known yet");
+            Log("net: fight screen %u: input delay yours %u, theirs %s; this PC aims to run %+d frames ahead%s",
+                N.epoch, N.myDelay, rd, ClockTargetQ() / 4, behind > 0 ? "; waiting for the difference once now" : "");
+            if (behind > 0) { PerfScope ps(perf::P_WAIT); Sleep((DWORD)(behind * 50 / 3)); }
+        }
         return NetAct::Inject;                         // frame 1: no input on both PCs
     }
     if (!NetRbMode()) {
@@ -1575,7 +1626,8 @@ static NetAct NetBeforeInput() {
     // frame, as often as every 6 frames, until the gap is gone.
     {
         int rttQ = (int)(N.rtt * 240 / 1000);                       // round trip in quarter frames
-        int aheadNowQ = ((int)g_frame - (int)N.rCur) * 4 - rttQ / 2;
+        // build 122: measured against the target (the delay difference), not against 0
+        int aheadNowQ = ((int)g_frame - (int)N.rCur) * 4 - rttQ / 2 - ClockTargetQ();
         N.aheadF += (aheadNowQ * 16 - N.aheadF) / 8;                // smoothing (x16 so nothing is lost to rounding)
         N.aheadQ = N.aheadF / 16;
         N.syncQ = (N.aheadQ - N.rAheadQ) / 2;
@@ -1737,6 +1789,9 @@ static void NetFrameEnd(void* scene) {
     if (N.st != NS_ON) return;
     NetFpFinalize();
     DlFrameEnd();                       // build 121
+    if (N.synced && N.sceneVt == SCENE_BTL && g_frame == 300)   // build 122: how the start of the fight went
+        Log("net: fight frame 300: %u one-frame waits so far in this fight; aim %+d frames ahead, now %+.2f from the aim (both views together)",
+            N.timeStalls - N.timeStallsAtStart, ClockTargetQ() / 4, N.syncQ / 4.0);
     if (NetRbMode() && g_frame % 600 == 0) {
         Log("net: clock sync at frame %u: this PC %+.2f frames ahead, the other PC says %+.2f, together %+.2f; %u one-frame waits so far; rollbacks %u (deepest %u)",
             g_frame, N.aheadQ / 4.0, N.rAheadQ / 4.0, N.syncQ / 4.0, N.timeStalls, g_rbRollbacks, g_rbMaxDepth);
