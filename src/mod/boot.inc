@@ -409,6 +409,7 @@ static void AnswerNo() {
     if (g_mode == Mode::SyncTest && g_rbOn) g_rbFrozen = true;   // the answer changes now: no rewinds past it
     answerNo = true;
     rmPending = false;
+    if (g_rchkStop == RB_NONE) g_rchkStop = g_frame;   // 122d: no random-number checks from here on
     Log("boot: back to the room: answering the rematch box NO (rollback off for the rest of this fight)");
 }
 // Build 107: zero both players' input in our match's result phase (the box is ours now).

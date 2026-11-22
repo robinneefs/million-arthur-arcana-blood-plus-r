@@ -108,7 +108,11 @@ static struct Rchk {
     uint32_t compared = 0, differed = 0, skipped = 0;
     uint32_t first = RB_NONE;            // first frame that differed on this screen
 } RC;
+// Build 122d: Back to room ends the fight on each PC at its own frame (rollback off, not synced):
+// frames from the NO answer on are not checked or sent (friend test 122: false DESYNC at the exit)
+static uint32_t g_rchkStop = RB_NONE;
 static void RchkReset() {
+    g_rchkStop = RB_NONE;
     memset(RC.rFrame, 0xFF, sizeof RC.rFrame);
     RC.rMax = 0; RC.next = 1; RC.sendTick = 0;
     RC.compared = RC.differed = RC.skipped = 0;
@@ -119,6 +123,10 @@ static uint32_t RchkFinalUpTo() {
     if (!NetRbMode() || g_rbConf < 2) return RB_NONE;
     uint32_t last = g_rbConf - 1;
     if (last > g_frame) last = g_frame;
+    if (g_rchkStop != RB_NONE) {
+        if (g_rchkStop < 2) return RB_NONE;
+        if (last >= g_rchkStop) last = g_rchkStop - 1;
+    }
     if (g_rbWrong != RB_NONE && g_rbWrong <= last) {      // a correction still to come (the step waited)
         if (g_rbWrong < 2) return RB_NONE;
         last = g_rbWrong - 1;
