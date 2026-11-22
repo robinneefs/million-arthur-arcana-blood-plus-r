@@ -71,6 +71,7 @@ struct NetCfg {
     uint64_t steamFriend = 0;
     int loopLag = 3, loopJitter = 1, loopLoss = 5, loopMirror = 1, loopTestDesync = 0;
     int loopDelay = -1;           // build 122: the stand-in's own input delay (-1 = the same as yours)
+    int testLag = 0, testJitter = 0, testLoss = 0;   // build 122: TEST ONLY fake lag on a real connection (home network / Steam), this PC's sending side
     int timeoutMs = 8000;
     int survey = 0;               // build 46: compare memory with the other PC at each screen start
     int syncSave = 1;             // build 48: player 2 uses player 1's saved data while connected
@@ -203,6 +204,18 @@ static void LoadNetSettings() {
     GetPrivateProfileStringW(L"net", L"loopback_other_player", L"mirror", w, 64, ini);
     g_ncfg.loopMirror = _wcsicmp(w, L"idle") != 0;
     g_ncfg.loopTestDesync = GetPrivateProfileIntW(L"net", L"loopback_test_desync_frame", 0, ini);
+    g_ncfg.testLag = GetPrivateProfileIntW(L"net", L"test_lag_frames", 0, ini);
+    g_ncfg.testJitter = GetPrivateProfileIntW(L"net", L"test_jitter_frames", 0, ini);
+    g_ncfg.testLoss = GetPrivateProfileIntW(L"net", L"test_loss_percent", 0, ini);
+    if (g_ncfg.testLag < 0) g_ncfg.testLag = 0;
+    if (g_ncfg.testLag > 30) g_ncfg.testLag = 30;
+    if (g_ncfg.testJitter < 0) g_ncfg.testJitter = 0;
+    if (g_ncfg.testJitter > 10) g_ncfg.testJitter = 10;
+    if (g_ncfg.testLoss < 0) g_ncfg.testLoss = 0;
+    if (g_ncfg.testLoss > 50) g_ncfg.testLoss = 50;
+    if (g_ncfg.testLag || g_ncfg.testJitter || g_ncfg.testLoss)
+        Log("net settings: TEST fake lag on real connections: packets this PC sends wait %d frames (+0..%d), %d%% are dropped",
+            g_ncfg.testLag, g_ncfg.testJitter, g_ncfg.testLoss);
     g_ncfg.timeoutMs = GetPrivateProfileIntW(L"net", L"timeout_ms", 8000, ini);
     g_ncfg.survey = GetPrivateProfileIntW(L"net", L"memory_survey", 0, ini);   // build 49: off unless asked for (it stops the game for seconds)
     g_ncfg.syncSave = GetPrivateProfileIntW(L"net", L"same_save_data", 1, ini);
@@ -454,13 +467,45 @@ static int LoopRecv(void* buf, int cap) {
     return -1;
 }
 
+// Build 122: TEST ONLY (test_lag_frames / test_jitter_frames / test_loss_percent in rollback.ini,
+// all 0 normally): this PC's packets wait before they really go out, to test the clock sync with
+// two real PCs on a home network. Packets keep their order; NetSend is also used by the away thread.
+static std::vector<LPkt> g_testOut;
+static CRITICAL_SECTION g_testLock;
+static bool g_testLockInit = false;
+static void TestFlush() {
+    if (!N.tr || g_testOut.empty()) return;
+    EnterCriticalSection(&g_testLock);
+    size_t i = 0;
+    uint32_t now = GetTickCount();
+    while (i < g_testOut.size() && (int32_t)(now - g_testOut[i].at) >= 0) { N.tr->Send(g_testOut[i].d, g_testOut[i].n); i++; }
+    if (i) g_testOut.erase(g_testOut.begin(), g_testOut.begin() + i);
+    LeaveCriticalSection(&g_testLock);
+}
 static void NetSend(const void* p, int n) {
     N.sent++;
     if (N.loop) LoopQueue(g_loopOut, p, n);
+    else if (N.tr && (g_ncfg.testLag || g_ncfg.testJitter || g_ncfg.testLoss) && n <= 1100) {
+        if (!g_testLockInit) { InitializeCriticalSection(&g_testLock); g_testLockInit = true; }
+        EnterCriticalSection(&g_testLock);
+        bool drop = g_ncfg.testLoss > 0 && (int)(LoopRand() % 100) < g_ncfg.testLoss;
+        if (!drop) {
+            LPkt k;
+            uint32_t frames = (uint32_t)g_ncfg.testLag + (g_ncfg.testJitter ? LoopRand() % (uint32_t)(g_ncfg.testJitter + 1) : 0);
+            k.at = GetTickCount() + frames * 50 / 3;
+            if (!g_testOut.empty() && (int32_t)(k.at - g_testOut.back().at) < 0) k.at = g_testOut.back().at;   // keep the order
+            k.n = (uint16_t)n;
+            memcpy(k.d, p, n);
+            g_testOut.push_back(k);
+        }
+        LeaveCriticalSection(&g_testLock);
+        TestFlush();
+    }
     else if (N.tr) N.tr->Send(p, n);
 }
 static int NetRecvRaw(void* buf, int cap) {
     if (N.loop) return LoopRecv(buf, cap);
+    TestFlush();
     return N.tr ? N.tr->Recv(buf, cap) : -1;
 }
 static NHdr MakeHdr(uint8_t type) { NHdr h; h.magic = NET_MAGIC; h.type = type; h.flags = 0; h.epoch = N.epoch; return h; }
@@ -983,6 +1028,12 @@ static void NetEnd(const char* why) {
     BootSessionEnd();                     // build 61: our rounds/timer out of the options again (before the save data goes back)
     SsRestore();
     if (N.st == NS_ON) UnflagAllPads();
+    if (N.tr && !g_testOut.empty()) {     // build 122 test fake lag: send what still waits (the goodbye too)
+        EnterCriticalSection(&g_testLock);
+        for (auto& k : g_testOut) N.tr->Send(k.d, k.n);
+        g_testOut.clear();
+        LeaveCriticalSection(&g_testLock);
+    }
     if (N.tr) { delete N.tr; N.tr = nullptr; }
     g_loopOut.clear();
     g_loopIn.clear();
