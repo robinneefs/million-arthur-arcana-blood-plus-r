@@ -968,7 +968,7 @@ static void MmSetupFrame() {
                 MmText(dl, g_fUiBold, 32, vx, cy + 2, MmC(P.text), v, 1);
                 if (i == 4) {
                     int d = SuDelay();
-                    for (int k = 0; k <= 8; k++) {
+                    for (int k = 1; k <= 8; k++) {   // build 127e: no dot for 0, so 0 frames = no dot lit
                         float dx = rx1 - 40 - (8 - k) * 26;
                         dl->AddCircleFilled(CP(dx, cy), CV(7), k <= d ? MmC(P.gold) : MmRGBA(60, 16, 12), 16);
                         dl->AddCircle(CP(dx, cy), CV(7), MmC(P.selOut), 16, CV(1.5f));
