@@ -289,8 +289,10 @@ static void SuBigCard(ImDrawList* dl, float x, float y, float sc, int a, ImU32 t
     MmImg(dl, "MA10_KCSTMZ", 83 + a, X(2), Y(3), 351 * sc, 481 * sc, tint);
     MmImg(dl, "MA10_KCSTMZ", frameOf[el], x, y, 356 * sc, 487 * sc, tint);
     float ex = (el % 2) * 0.5f, ey = (el / 2) * 0.5f;
-    MmImg(dl, "MA10_KCSTMZ", 19, X(12), Y(9), 72 * sc, 73 * sc, tint, ImVec2(ex, ey), ImVec2(ex + 0.5f, ey + 0.5f));
-    MmImg(dl, "MA10_KCSTMZ", 30, X(14), Y(92), 57 * sc, 58 * sc, tint, ImVec2((cost - 1) / 3.0f, 0), ImVec2(cost / 3.0f, 1));
+    // build 127b: icon and cost centred in the left column (card edge x 3 to the gold line x 85, centre 44),
+    // measured from the visible pixels: icon centre was 47.5, cost 40.5 (1) / 42 (2, 3)
+    MmImg(dl, "MA10_KCSTMZ", 19, X(8.5f), Y(9), 72 * sc, 73 * sc, tint, ImVec2(ex, ey), ImVec2(ex + 0.5f, ey + 0.5f));
+    MmImg(dl, "MA10_KCSTMZ", 30, X(cost == 1 ? 17.5f : 16), Y(92), 57 * sc, 58 * sc, tint, ImVec2((cost - 1) / 3.0f, 0), ImVec2(cost / 3.0f, 1));
     // the name strip: a dark bar with the game's own lettering of the name (one 24 px row per Knight)
     dl->AddRectFilledMultiColor(CP(X(88), Y(28)), CP(X(344), Y(54)), MmRGBA(48, 30, 16, 0.55f), MmRGBA(48, 30, 16, 0.94f),
                                 MmRGBA(48, 30, 16, 0.94f), MmRGBA(48, 30, 16, 0.55f));
