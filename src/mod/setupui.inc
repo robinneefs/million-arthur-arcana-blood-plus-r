@@ -310,17 +310,31 @@ static void SuBigCard(ImDrawList* dl, float x, float y, float sc, int a, ImU32 t
 // build 126: the game's small grid card (192 x 77 at sc 1): element frame, portrait, cost.
 // a = SU_GRID_RANDOM: the Random card. dim: darker, like the cards the cursor is not on.
 static void SuSmallCard(ImDrawList* dl, float x, float y, float sc, int a, bool dim = false, float alpha = 1.0f) {
+    // build 126b: rounded corners, an element gradient behind the portrait (like the game's), and the
+    // frame drawn last so its gold inner border covers the portrait's edges
     ImU32 tint = dim ? MmRGBA(165, 150, 150, alpha) : MmRGBA(255, 255, 255, alpha);
-    if (a == SU_GRID_RANDOM) MmImg(dl, "MA10_KCSTMZ", dim ? 26 : 27, x, y, 192 * sc, 77 * sc, tint);
+    const float rnd = CV(7 * sc);
+    auto img = [&](int spr, float ix, float iy, float iw, float ih, float r) {
+        ImVec2 ts;
+        void* tex = art::Get("MA10_KCSTMZ", spr, &ts);
+        if (tex) dl->AddImageRounded((ImTextureID)tex, CP(ix, iy), CP(ix + iw, iy + ih), ImVec2(0, 0), ImVec2(1, 1), tint, r);
+    };
+    if (a == SU_GRID_RANDOM) img(dim ? 26 : 27, x, y, 192 * sc, 77 * sc, rnd);
     else if (a >= 0 && a < 31) {
         static const int frameOf[4] = {25, 22, 23, 28};
-        MmImg(dl, "MA10_KCSTMZ", frameOf[SuEl(a)], x, y, 192 * sc, 77 * sc, tint);
-        MmImg(dl, "MA10_KCSTMZ", SuAssistSprite(a), x + 7 * sc, y + 6 * sc, 139 * sc, 64 * sc, tint);
+        static const uint8_t top[4][3] = {{255, 132, 0}, {0, 240, 250}, {90, 215, 105}, {200, 50, 215}};
+        static const uint8_t bot[4][3] = {{214, 4, 0}, {0, 125, 232}, {18, 130, 40}, {110, 0, 240}};
+        int el = SuEl(a);
+        float k = dim ? 0.65f : 1.0f;
+        ImU32 ct = MmRGBA((int)(top[el][0] * k), (int)(top[el][1] * k), (int)(top[el][2] * k), alpha);
+        ImU32 cb = MmRGBA((int)(bot[el][0] * k), (int)(bot[el][1] * k), (int)(bot[el][2] * k), alpha);
+        dl->AddRectFilledMultiColor(CP(x + 7 * sc, y + 7 * sc), CP(x + 144 * sc, y + 69 * sc), ct, ct, cb, cb);
+        img(SuAssistSprite(a), x + 7 * sc, y + 6 * sc, 139 * sc, 64 * sc, 0);
+        img(frameOf[el], x, y, 192 * sc, 77 * sc, rnd);
         int cost = SuCost(a);
         MmImg(dl, "MA10_KCSTMZ", 30, x + 147 * sc, y + 9 * sc, 44 * sc, 45 * sc, tint, ImVec2((cost - 1) / 3.0f, 0), ImVec2(cost / 3.0f, 1));
-    } else MmImg(dl, "MA10_KCSTMZ", 24, x, y, 192 * sc, 77 * sc, tint);
-    if (dim) dl->AddRectFilledMultiColor(CP(x, y), CP(x + 192 * sc, y + 77 * sc), MmRGBA(0, 0, 0, 0), MmRGBA(0, 0, 0, 0),
-                                         MmRGBA(10, 0, 0, 0.4f * alpha), MmRGBA(10, 0, 0, 0.4f * alpha));
+    } else img(24, x, y, 192 * sc, 77 * sc, rnd);
+    if (dim) dl->AddRectFilled(CP(x, y), CP(x + 192 * sc, y + 77 * sc), MmRGBA(10, 0, 0, 0.22f * alpha), rnd);
 }
 // the head of the character in one colour (for the colour squares)
 static void SuHead(ImDrawList* dl, int chara, int colour, float x, float y, float w, float h) {
@@ -898,15 +912,15 @@ static void MmSetupFrame() {
                 dl->AddRectFilled(CP(rx0, ry0), CP(rx1, ry1), MmRGBA(70, 14, 8, 0.85f), CV(8));
                 dl->AddRect(CP(rx0, ry0), CP(rx1, ry1), MmC(P.gold), CV(8), 0, CV(3));
             } else dl->AddRect(CP(rx0, ry0), CP(rx1, ry1), MmC(P.acc, 0.55f), CV(8), 0, CV(1.5f));
-            MmText(dl, g_fMenu, 14, rx0 + 30, ry0 + 30, on ? MmC(P.gold) : MmC(P.faint), lab[i]);
+            MmText(dl, g_fMenu, 14, rx0 + 30, i <= 1 ? cy - 21 : ry0 + 30, on ? MmC(P.gold) : MmC(P.faint), lab[i]);
             if (i <= 2) MmText(dl, g_fUiBold, 34, rx1 - 26, cy, MmC(off ? P.faint : P.dim), ">", 2);
             if (i == 0) {
-                MmText(dl, g_fUiBold, 30, rx0 + 30, ry0 + 64, MmC(P.text), chName);
+                MmText(dl, g_fUiBold, 30, rx0 + 30, cy + 14, MmC(P.text), chName);
                 MmImg(dl, "MA10_CSEL", SuPortraitOf(SU.chara == SU_RANDOM ? -1 : SU.chara), rx1 - 200, ry0 + 6, 130, 74, IM_COL32_WHITE, ImVec2(0, 0.1f), ImVec2(1, 0.5f));
             } else if (i == 1) {
                 char c[32];
                 if (off) snprintf(c, sizeof c, "Random"); else snprintf(c, sizeof c, "Colour %d", SuColor() + 1);
-                MmText(dl, g_fUiBold, 30, rx0 + 30, ry0 + 64, MmC(off ? P.faint : P.text), c);
+                MmText(dl, g_fUiBold, 30, rx0 + 30, cy + 14, MmC(off ? P.faint : P.text), c);
                 if (!off) {
                     dl->AddRectFilled(CP(rx1 - 160, ry0 + 6), CP(rx1 - 86, ry0 + 80), MmRGBA(48, 10, 8), CV(4));
                     SuHead(dl, SU.chara, SuColor(), rx1 - 160, ry0 + 6, 74, 74);
@@ -938,7 +952,7 @@ static void MmSetupFrame() {
                 if (i == 4) {
                     int d = SuDelay();
                     for (int k = 0; k <= 8; k++) {
-                        float dx = vx + 230 + k * 30;
+                        float dx = rx1 - 40 - (8 - k) * 26;
                         dl->AddCircleFilled(CP(dx, cy), CV(7), k <= d ? MmC(P.gold) : MmRGBA(60, 16, 12), 16);
                         dl->AddCircle(CP(dx, cy), CV(7), MmC(P.selOut), 16, CV(1.5f));
                         char n[4]; snprintf(n, sizeof n, "%d", k);
