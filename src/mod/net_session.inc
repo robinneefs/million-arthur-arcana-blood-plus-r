@@ -74,7 +74,7 @@ struct NetCfg {
     int testLag = 0, testJitter = 0, testLoss = 0;   // build 122: TEST ONLY fake lag on a real connection (home network / Steam), this PC's sending side
     int timeoutMs = 8000;
     int survey = 0;               // build 46: compare memory with the other PC at each screen start
-    int syncSave = 1;             // build 48: player 2 uses player 1's saved data while connected
+    int syncSave = 0;             // build 48: player 2 uses player 1's saved data while connected (build 128b: off, see LoadNetSettings)
     int clockSync = 1;            // build 57: 0 = old clock sync off (for comparing)
 };
 static NetCfg g_ncfg;
@@ -233,7 +233,11 @@ static void LoadNetSettings() {
             g_ncfg.testLag, g_ncfg.testJitter, g_ncfg.testLoss);
     g_ncfg.timeoutMs = GetPrivateProfileIntW(L"net", L"timeout_ms", 8000, ini);
     g_ncfg.survey = GetPrivateProfileIntW(L"net", L"memory_survey", 0, ini);   // build 49: off unless asked for (it stops the game for seconds)
-    g_ncfg.syncSave = GetPrivateProfileIntW(L"net", L"same_save_data", 1, ini);
+    // build 128b (security): off. Player 2 copied player 1's save sections raw into the game, so
+    // a hostile player 1 could put anything there. Since build 61 our own setup sets the fight's
+    // characters, colours, Knights, stage, rounds and timer, which is what the sync was for.
+    // same_save_data=1 brings it back, for comparison tests only.
+    g_ncfg.syncSave = GetPrivateProfileIntW(L"net", L"same_save_data", 0, ini);
     g_ncfg.clockSync = GetPrivateProfileIntW(L"net", L"clock_sync", 1, ini);
     if (g_ncfg.delay < 0) g_ncfg.delay = 0;
     if (g_ncfg.delay > 8) g_ncfg.delay = 8;
