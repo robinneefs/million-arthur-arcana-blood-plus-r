@@ -78,6 +78,19 @@ struct NetCfg {
     int clockSync = 1;            // build 57: 0 = old clock sync off (for comparing)
 };
 static NetCfg g_ncfg;
+// Build 128 (security): the raw button bits a controller can have = every mask in the game's
+// button table (0xC7FF28, 18 entries: d-pad, ABXY, shoulders, triggers, sticks, Back/Start).
+// Inputs from the network keep only these, on both PCs alike (the sender masks its own too).
+static uint32_t PadRawMask() {
+    static uint32_t mask = 0;
+    if (!mask) {
+        uint32_t m = 0;
+        for (int i = 0; i < 18; i++) m |= reinterpret_cast<const uint32_t*>(0x00C7FF28)[i];
+        mask = m ? m : 0xFFFFFFFFu;
+        Log("net: controller button bits %08X", mask);
+    }
+    return mask;
+}
 
 struct NetIn { uint32_t frame = RB_NONE; uint32_t v[2] = {0, 0}; };
 struct FpLocal {
@@ -1198,7 +1211,20 @@ static void NetHandle(const uint8_t* p, int n) {
             return;
         }
         bool first = !N.gotHello;
-        if (first) N.rh = *m;
+        if (first) {
+            N.rh = *m;
+            // build 128 (security): the other game's hello goes into game memory (button layout)
+            // and picks the side, so only values the game has are kept
+            N.rh.name[sizeof N.rh.name - 1] = 0;
+            if (N.rh.wantSide > 2) { Log("net: the other game asked for side %u; ignored", N.rh.wantSide); N.rh.wantSide = 0; }
+            bool layoutOk = true;
+            for (int i = 0; i < 12; i++) layoutOk = layoutOk && N.rh.padCfg[i] <= 18;   // button numbers 0-17, 18 = none
+            if (!layoutOk) {
+                static const uint32_t kDefaultPad[12] = {4, 5, 6, 7, 11, 18, 10, 12, 18, 18, 13, 18};
+                memcpy(N.rh.padCfg, kDefaultPad, sizeof kDefaultPad);
+                Log("net: the other game's button layout has values the game doesn't know; using the default layout for them");
+            }
+        }
         N.gotHello = true;
         if (first || !m->seenYou || N.st == NS_ON) SendHello();   // (ON: our last hello may have been lost)
         if (N.st == NS_HELLO && m->seenYou) NetBecomeOn();
@@ -1234,7 +1260,7 @@ static void NetHandle(const uint8_t* p, int n) {
             NetIn& x = N.rIn[f % 256];
             if (x.frame == f) continue;
             x.frame = f;
-            x.v[0] = m->in[i][0];
+            x.v[0] = m->in[i][0] & PadRawMask();   // build 128: only buttons a real controller has
             x.v[1] = m->in[i][1];
             if (f > N.rMax) N.rMax = f;
         }
@@ -1257,7 +1283,7 @@ static void NetHandle(const uint8_t* p, int n) {
         break;
     case M_SURV:
     case M_SPAGE:
-        SvHandle(p, n);
+        if (g_ncfg.survey) SvHandle(p, n);   // build 128: a test tool; ignored unless turned on here
         break;
     case M_SAVE:
     case M_SAVEACK:
@@ -1793,7 +1819,7 @@ static void NetFill(uint32_t T) {
         for (uint32_t f = from; f <= s; f++) {
             NetIn& x = N.lIn[f % 256];
             x.frame = f;
-            x.v[0] = raw0;
+            x.v[0] = raw0 & PadRawMask();   // build 128: the same mask as the other player's input gets
             x.v[1] = raw1;
         }
         N.lNewest = s;

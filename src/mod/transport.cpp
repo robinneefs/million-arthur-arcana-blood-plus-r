@@ -588,11 +588,18 @@ static void SeatRules() {
     int seats = (RV.set.size / 2) * 2;
     if (seats < 2) seats = 2;
     RV.mySeat = -1; RV.myReady = false;
+    // build 128 (security): whoever already sat in a seat keeps it; only two members claiming a
+    // free seat at the same moment are sorted by Steam id (before, a lower id took any seat)
+    static uint64_t holder[ROOM_MAX_MEMBERS] = {};
     for (int i = 0; i < RV.nMembers; i++) {
         RoomMember& m = RV.members[i];
         if (m.seat >= seats || m.seat < -1) m.seat = -1;
+    }
+    for (int i = 0; i < RV.nMembers; i++) {
+        RoomMember& m = RV.members[i];
         for (int j = 0; j < RV.nMembers && m.seat >= 0; j++)
-            if (j != i && RV.members[j].seat == m.seat && RV.members[j].id < m.id) {
+            if (j != i && RV.members[j].seat == m.seat &&
+                (holder[m.seat] == RV.members[j].id || (holder[m.seat] != m.id && RV.members[j].id < m.id))) {
                 static uint32_t lastClash = 0;
                 if (m.me && GetTickCount() - lastClash > 2000) {
                     lastClash = GetTickCount();
@@ -605,6 +612,8 @@ static void SeatRules() {
         if (m.seat < 0) m.ready = false;
         if (m.me) { RV.mySeat = m.seat; RV.myReady = m.ready; }
     }
+    for (int k = 0; k < ROOM_MAX_MEMBERS; k++) holder[k] = 0;
+    for (int i = 0; i < RV.nMembers; i++) if (RV.members[i].seat >= 0) holder[RV.members[i].seat] = RV.members[i].id;
     if (!g_standIn || RV.nMembers >= ROOM_MAX_MEMBERS) return;
     const RoomMember* me = nullptr;
     for (int i = 0; i < RV.nMembers; i++) if (RV.members[i].me) me = &RV.members[i];
@@ -636,10 +645,12 @@ static void ReadRoom(uint64_t lobby) {
         const char* c = pGetLobbyData(g_mm, lobby, "code");
         snprintf(RV.code, sizeof RV.code, "%s", RV.set.priv && c ? c : "");
     }
-    RV.set.rounds = DataInt(lobby, "rounds", 2);
-    RV.set.timer = DataInt(lobby, "timer", 2);
-    RV.set.setLen = DataInt(lobby, "setlen", 0);
-    RV.set.size = pGetLobbyMemberLimit(g_mm, lobby);
+    // build 128 (security): the host writes these; only values the mod offers are kept
+    auto clampi = [](int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; };
+    RV.set.rounds = clampi(DataInt(lobby, "rounds", 2), 1, 5);
+    RV.set.timer = clampi(DataInt(lobby, "timer", 2), 0, 3);
+    RV.set.setLen = clampi(DataInt(lobby, "setlen", 0), 0, 10);
+    RV.set.size = clampi(pGetLobbyMemberLimit(g_mm, lobby), 2, ROOM_MAX_MEMBERS);
     RV.owner = pGetLobbyOwner(g_mm, lobby);
     int n = pGetNumLobbyMembers(g_mm, lobby);
     if (n > ROOM_MAX_MEMBERS) n = ROOM_MAX_MEMBERS;

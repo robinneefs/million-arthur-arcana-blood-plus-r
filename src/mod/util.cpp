@@ -55,9 +55,39 @@ void MarkCleanExit() {
     DeleteFileW(flag);
 }
 
+// Build 128 (security): packets from the other player can make the mod log a line each, so a
+// flood could fill the disk and stutter the game (every line is flushed). Lines are let through
+// from a budget: bursts of up to 5000 lines (the desync reports), then 200 a second; the rest
+// is counted and said once the budget is back. A run's log stops at 100 MB.
+static double g_logBudget = 5000;
+static DWORD g_logBudgetAt = 0;
+static uint32_t g_logDropped = 0;
+static uint64_t g_logBytes = 0;
+static const uint64_t LOG_MAX_BYTES = 100ull << 20;
 void Log(const char* fmt, ...) {
     if (!g_log) return;
     EnterCriticalSection(&g_logLock);
+    {
+        DWORD now = GetTickCount();
+        if (g_logBudgetAt) g_logBudget += (now - g_logBudgetAt) * 0.2;   // 200 lines a second
+        if (g_logBudget > 5000) g_logBudget = 5000;
+        g_logBudgetAt = now;
+        if (g_logBytes > LOG_MAX_BYTES) {
+            static bool said = false;
+            if (!said) { said = true; fputs("(the log is full: 100 MB; nothing more is written this run)\n", g_log); fflush(g_log); }
+            LeaveCriticalSection(&g_logLock);
+            return;
+        }
+        if (g_logBudget < 1) { g_logDropped++; LeaveCriticalSection(&g_logLock); return; }
+        g_logBudget -= 1;
+        if (g_logDropped) {
+            char d[96];
+            int dn = snprintf(d, sizeof d, "(%u log lines were left out: too many in a short time)\n", g_logDropped);
+            fputs(d, g_log);
+            g_logBytes += dn > 0 ? dn : 0;
+            g_logDropped = 0;
+        }
+    }
     SYSTEMTIME t; GetLocalTime(&t);
     char line[8192];
     int n = snprintf(line, sizeof line, "[%02d:%02d:%02d.%03d] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
@@ -66,6 +96,7 @@ void Log(const char* fmt, ...) {
     va_end(ap);
     fputs(line, g_log);
     fputc('\n', g_log);
+    g_logBytes += strlen(line) + 1;
     fflush(g_log);
     strncpy(g_tail[g_tailNext], line, TAIL_LEN - 1);
     g_tail[g_tailNext][TAIL_LEN - 1] = 0;

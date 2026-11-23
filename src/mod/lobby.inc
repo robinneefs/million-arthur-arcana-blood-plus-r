@@ -242,9 +242,40 @@ static void LbSend() {
     LB.lastSend = GetTickCount();
 }
 
+// Build 128 (security): player 2 writes player 1's match settings straight into the game's
+// setup blocks and options, so every value must be one the game has. Player 2 also checks that
+// its own side is what it picked (player 1 may only resolve "Random"). Returns "" when fine,
+// else what is wrong (for the log).
+static const char* LbSettingsBad(const MatchSettings& s, int mySide, const LbPicks& mine) {
+    for (int i = 0; i < 2; i++) {
+        if (s.chara[i] >= LbCharCount()) return "a character the game doesn't have";
+        if (s.color[i] >= LbColorCount(s.chara[i])) return "a colour the character doesn't have";
+        for (int k = 0; k < 3; k++) if (s.assist[i][k] >= LB_ASSISTS) return "a Support Knight the game doesn't have";
+    }
+    bool stageOk = false;
+    for (int i = 0; i < LB_STAGES; i++) stageOk |= LB_STAGE_IDS[i] == s.stage;
+    if (!stageOk) return "a stage the game doesn't have";
+    if (s.rounds < 1 || s.rounds > 5) return "a number of rounds outside 1-5";
+    if (s.timer >= LB_TIMERS) return "a round timer the game doesn't have";
+    // this player's own side: the character (unless Random), the colour and the Knights as picked
+    int me = mySide & 1;
+    bool myCharaFixed = mine.chara != LB_RANDOM && mine.chara < LbCharCount();
+    if (myCharaFixed && s.chara[me] != mine.chara) return "a different character for you than you picked";
+    if (myCharaFixed) {
+        uint8_t col = mine.color < LbColorCount(mine.chara) ? mine.color : 0;
+        if (s.color[me] != col) return "a different colour for you than you picked";
+    }
+    for (int k = 0; k < 3; k++) {
+        uint8_t a = mine.assist[k] < LB_ASSISTS ? mine.assist[k] : 0;
+        if (s.assist[me][k] != a) return "different Support Knights for you than you picked";
+    }
+    return "";
+}
+
 // Packets in (game thread, from NetHandle).
 static void LbHandle(const uint8_t* p, int n) {
     const NHdr* h = (const NHdr*)p;
+    const char* badStart = nullptr;     // build 128: player 1 sent settings that can't be used
     EnterCriticalSection(&g_lobbyLock);
     if (h->type == M_LOBBY && n >= (int)sizeof(NLobby)) {
         const NLobby* m = (const NLobby*)p;
@@ -260,7 +291,7 @@ static void LbHandle(const uint8_t* p, int n) {
             t.choice = m->choice <= LCH_LEAVE ? m->choice : LCH_NONE;
             t.p = m->p;
             t.delay = m->delay;
-            t.rounds = m->rounds;
+            t.rounds = m->rounds >= 1 && m->rounds <= 5 ? m->rounds : 2;   // build 128
             t.timer = m->timer < LB_TIMERS ? m->timer : 2;
             t.matchNo = m->matchNo;
             t.choiceMatch = m->choiceMatch;
@@ -277,7 +308,13 @@ static void LbHandle(const uint8_t* p, int n) {
         }
     } else if (h->type == M_START && n >= (int)sizeof(NStart) && N.side == 1) {
         const NStart* m = (const NStart*)p;
-        if (!LB.haveSettings || m->s.matchNo != LB.s.matchNo) {
+        const char* why = (!LB.haveSettings || m->s.matchNo != LB.s.matchNo) ? LbSettingsBad(m->s, N.side, LB.me.p) : "";
+        if (why[0]) {
+            Log("lobby: player 1's match settings for match %u are refused: %s (P1 %u/%u/%u-%u-%u, P2 %u/%u/%u-%u-%u, stage %u, rounds %u, timer %u)",
+                m->s.matchNo, why, m->s.chara[0], m->s.color[0], m->s.assist[0][0], m->s.assist[0][1], m->s.assist[0][2],
+                m->s.chara[1], m->s.color[1], m->s.assist[1][0], m->s.assist[1][1], m->s.assist[1][2], m->s.stage, m->s.rounds, m->s.timer);
+            badStart = why;
+        } else if (!LB.haveSettings || m->s.matchNo != LB.s.matchNo) {
             LB.s = m->s;
             LB.sum = LbSum(LB.s);
             LB.haveSettings = true;
@@ -290,11 +327,13 @@ static void LbHandle(const uint8_t* p, int n) {
             LbChanged();
             LbNoteStart();
         }
+        if (!badStart) {
         NStartAck a{};
         a.h = MakeHdr(M_STARTACK);
         a.matchNo = LB.s.matchNo;
         a.sum = LB.sum;
         NetSend(&a, sizeof a);
+        }
     } else if (h->type == M_STARTACK && n >= (int)sizeof(NStartAck) && N.side == 0) {
         const NStartAck* m = (const NStartAck*)p;
         if (LB.haveSettings && m->matchNo == LB.s.matchNo && LB.confirmed == 0) {
@@ -304,6 +343,7 @@ static void LbHandle(const uint8_t* p, int n) {
         }
     }
     LeaveCriticalSection(&g_lobbyLock);
+    if (badStart) NetEnd("the other player's game sent match settings that can't be used");
 }
 
 // Player 1: turn both sides' picks into the final match settings.
