@@ -339,7 +339,22 @@ static void SuSmallCard(ImDrawList* dl, float x, float y, float sc, int a, bool 
 // the head of the character in one colour (for the colour squares)
 static void SuHead(ImDrawList* dl, int chara, int colour, float x, float y, float w, float h) {
     float hb[4] = {0.3f, 0, 0.64f, 0.2f};
-    void* tex = art::GetChara(chara, colour, nullptr, hb);
+    ImVec2 ss(0, 0);
+    void* tex = art::GetChara(chara, colour, &ss, hb);
+    if (!tex || ss.x <= 0 || ss.y <= 0 || w <= 0 || h <= 0) return;
+    // build 126c: keep the sprite's own proportions: widen the head box (around its centre) or make it
+    // taller (downwards) until it has the shape of the box it is drawn in
+    float cw = (hb[2] - hb[0]) * ss.x, ch = (hb[3] - hb[1]) * ss.y, want = w / h;
+    if (cw / ch > want) {
+        float nh = cw / want / ss.y;
+        hb[3] = hb[1] + nh;
+        if (hb[3] > 1) { hb[1] = ImMax(0.0f, hb[1] - (hb[3] - 1)); hb[3] = 1; }
+    } else {
+        float nw = ch * want / ss.x, mid = (hb[0] + hb[2]) / 2;
+        hb[0] = mid - nw / 2; hb[2] = mid + nw / 2;
+        if (hb[0] < 0) { hb[2] -= hb[0]; hb[0] = 0; }
+        if (hb[2] > 1) { hb[0] = ImMax(0.0f, hb[0] - (hb[2] - 1)); hb[2] = 1; }
+    }
     SuTex(dl, tex, x, y, w, h, ImVec2(hb[0], hb[1]), ImVec2(hb[2], hb[3]));
 }
 // the fight sprite in its colour, standing on the stage picture (preview box)
@@ -922,8 +937,8 @@ static void MmSetupFrame() {
                 if (off) snprintf(c, sizeof c, "Random"); else snprintf(c, sizeof c, "Colour %d", SuColor() + 1);
                 MmText(dl, g_fUiBold, 30, rx0 + 30, cy + 14, MmC(off ? P.faint : P.text), c);
                 if (!off) {
-                    dl->AddRectFilled(CP(rx1 - 160, ry0 + 6), CP(rx1 - 86, ry0 + 80), MmRGBA(48, 10, 8), CV(4));
-                    SuHead(dl, SU.chara, SuColor(), rx1 - 160, ry0 + 6, 74, 74);
+                    dl->AddRectFilled(CP(rx1 - 200, ry0 + 6), CP(rx1 - 70, ry0 + 80), MmRGBA(48, 10, 8), CV(4));
+                    SuHead(dl, SU.chara, SuColor(), rx1 - 200, ry0 + 6, 130, 74);
                 }
             } else if (i == 2) {
                 const SuPreset& pr = SuInUse();
