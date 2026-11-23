@@ -68,12 +68,19 @@ static MmNav MmReadNav(bool typing) {
 #endif
     return n;
 }
+// build 127: while the sticker picker is open, things under it don't react to the mouse
+static bool g_stkMask = false;
+static const float STK_X0 = 1230, STK_Y0 = 222, STK_X1 = 1870, STK_Y1 = 852;
+static bool MmMouseIn(float x0, float y0, float x1, float y1) {
+    ImVec2 m = ImGui::GetIO().MousePos, a = CP(x0, y0), b = CP(x1, y1);
+    return m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y;
+}
 static bool MmHover(float x0, float y0, float x1, float y1) {
 #ifndef UI_HARNESS
     if (g_uiBlock) return false;
 #endif
-    ImVec2 m = ImGui::GetIO().MousePos, a = CP(x0, y0), b = CP(x1, y1);
-    return m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y;
+    if (g_stkMask && MmMouseIn(STK_X0, STK_Y0 - 24, STK_X1, STK_Y1)) return false;
+    return MmMouseIn(x0, y0, x1, y1);
 }
 static bool MmClicked(float x0, float y0, float x1, float y1) { return ImGui::GetIO().MouseClicked[0] && MmHover(x0, y0, x1, y1); }
 
@@ -518,9 +525,40 @@ static char g_chatIn[200] = "";
 static bool g_chatFocus = false;
 static bool g_invOpen = false;
 static int g_invSel = 0;
+// build 127: chat stickers (the game's 25 chat stamps, MA10_CS_NETWORK 0 = a 5 x 5 sheet), mouse only for now
+static bool g_stkOpen = false;
+static int g_stkHov = -1;
+static double g_stkLast = -10;
+static const float STK_BX0 = 1802, STK_BX1 = 1852, STK_BY0 = 868, STK_BY1 = 920;   // the smiley button next to the chat field
+static void MmSticker(ImDrawList* dl, int n, float x, float y, float h, ImU32 tint = IM_COL32_WHITE) {
+    float w = h * (1135.0f / 5) / (1050.0f / 5);
+    int r = n / 5, c = n % 5;
+    MmImg(dl, "MA10_CS_NETWORK", 0, x, y, w, h, tint, ImVec2(c / 5.0f, r / 5.0f), ImVec2((c + 1) / 5.0f, (r + 1) / 5.0f));
+}
+// the title on the picker's top edge: a small crimson plate with gold edges and diamonds
+static void MmStickerTitle(ImDrawList* dl, float cx, float cy, const char* t) {
+    const MmPal& P = MmP();
+    float tw = g_fMenu->CalcTextSizeA(CV(18 * MmEm(g_fMenu)), FLT_MAX, 0.0f, t).x / g_cv;
+    float hw = tw / 2 + 40, hh = 20;
+    MmImg(dl, "MA10_CMN", 83, cx - hw - 30, cy - hh - 10, 2 * hw + 60, 2 * hh + 20, MmGlowCol(P.glow, 0.35f), ImVec2(0, 0), ImVec2(1, 1), true);
+    // plate: pointed ends like a ribbon
+    ImVec2 pts[6] = {CP(cx - hw, cy - hh), CP(cx + hw, cy - hh), CP(cx + hw + 14, cy), CP(cx + hw, cy + hh), CP(cx - hw, cy + hh), CP(cx - hw - 14, cy)};
+    dl->AddConvexPolyFilled(pts, 6, MmRGBA(70, 8, 8));
+    dl->AddRectFilledMultiColor(CP(cx - hw, cy - hh), CP(cx + hw, cy), MmRGBA(150, 22, 18), MmRGBA(150, 22, 18), MmRGBA(90, 12, 10), MmRGBA(90, 12, 10));
+    dl->AddRectFilledMultiColor(CP(cx - hw, cy), CP(cx + hw, cy + hh), MmRGBA(90, 12, 10), MmRGBA(90, 12, 10), MmRGBA(52, 6, 6), MmRGBA(52, 6, 6));
+    dl->AddPolyline(pts, 6, MmC(P.gold, 0.95f), ImDrawFlags_Closed, CV(2));
+    ImVec2 in[6] = {CP(cx - hw + 4, cy - hh + 5), CP(cx + hw - 4, cy - hh + 5), CP(cx + hw + 6, cy), CP(cx + hw - 4, cy + hh - 5), CP(cx - hw + 4, cy + hh - 5), CP(cx - hw - 6, cy)};
+    dl->AddPolyline(in, 6, MmC(P.gold, 0.35f), ImDrawFlags_Closed, CV(1));
+    for (int s = -1; s <= 1; s += 2) {   // a gold diamond each side of the word
+        float dx = cx + s * (tw / 2 + 20);
+        ImVec2 d[4] = {CP(dx, cy - 6), CP(dx + 6, cy), CP(dx, cy + 6), CP(dx - 6, cy)};
+        dl->AddConvexPolyFilled(d, 4, MmC(P.gold));
+    }
+    MmText(dl, g_fMenu, 18, cx, cy, MmC(P.text), t, 1, 2, MmC(P.ink));
+}
 static void MmRoomFrame() {
     const MmPal& P = MmP();
-    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_invOpen = false; g_seatSel = g_rv.mySeat >= 0 ? g_rv.mySeat : 0; }
+    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_invOpen = false; g_stkOpen = false; g_seatSel = g_rv.mySeat >= 0 ? g_rv.mySeat : 0; }
     MmT T = MmTimes(MM.roomT);
     ImGuiIO& io = ImGui::GetIO();
     bool typing = io.WantTextInput;
@@ -549,6 +587,15 @@ static void MmRoomFrame() {
         return;
     }
 
+    // ---- build 127: the sticker picker: B / right click close it, a click outside closes it (and does nothing else) ----
+    if (g_stkOpen && (g_invOpen || !inRoom)) g_stkOpen = false;
+    if (g_stkOpen) {
+        if (nav.b || io.MouseClicked[1]) { g_stkOpen = false; MM_SND |= 4; nav = MmNav(); io.MouseClicked[1] = false; }
+        else if (io.MouseClicked[0] && !MmMouseIn(STK_X0, STK_Y0 - 24, STK_X1, STK_Y1) && !MmMouseIn(STK_BX0, STK_BY0, STK_BX1, STK_BY1)) {
+            g_stkOpen = false; MM_SND |= 4; io.MouseClicked[0] = false;
+        }
+    }
+    g_stkMask = g_stkOpen;
     // ---- invite friends panel takes the input while open ----
     if (g_invOpen) {
         int nf = R.nFriends;
@@ -806,25 +853,46 @@ static void MmRoomFrame() {
         float yb = 844, ytop = 206;
         for (int i = R.nChat - 1; i >= 0 && yb > ytop; i--) {
             const net::ChatLine& c = R.chat[i];
-            if (c.system) {
+            if (!c.system && c.sticker >= 0) {   // build 127: name, then the sticker 130 px tall
+                float top = yb + 14 - 130;
+                if (top < ytop - 20) break;
+                MmSticker(dl, c.sticker, RX0 + 18 + ox, top, 130, MmRGBA(255, 255, 255, in));
+                yb = top - 22;
+            } else if (c.system) {
                 int nl = MmWrap(g_fUi, 21, c.text, RX1 - RX0 - 44, lines, 3);
                 for (int k = nl - 1; k >= 0 && yb > ytop; k--) { MmText(dl, g_fUi, 21, RX0 + 22 + ox, yb, MmC(P.faint, in), lines[k]); yb -= 28; }
                 yb -= 12;
                 continue;
             }
-            int nl = MmWrap(g_fUi, 23, c.text, RX1 - RX0 - 44, lines, 6);
-            for (int k = nl - 1; k >= 0 && yb > ytop; k--) { MmText(dl, g_fUi, 23, RX0 + 22 + ox, yb, MmC(P.text, in), lines[k]); yb -= 30; }
-            if (yb <= ytop) break;
+            else {
+                int nl = MmWrap(g_fUi, 23, c.text, RX1 - RX0 - 44, lines, 6);
+                for (int k = nl - 1; k >= 0 && yb > ytop; k--) { MmText(dl, g_fUi, 23, RX0 + 22 + ox, yb, MmC(P.text, in), lines[k]); yb -= 30; }
+                if (yb <= ytop) break;
+            }
             bool mine = c.from == R.me;
             MmRgb nc = mine ? P.gold : (c.from % 3 == 0 ? MmRgb{255, 120, 100} : c.from % 3 == 1 ? MmRgb{240, 170, 110} : P.dim);
             MmText(dl, g_fUiBold, 23, RX0 + 22 + ox, yb, MmC(nc, in), mine ? "You" : c.name);
             yb -= 44;
         }
-        if (MmTextField("##chat", g_chatIn, sizeof g_chatIn, RX0 + 16 + ox, 868, RX1 - 16 + ox, 920, "Say something... (Tab)", g_chatFocus)) {
+        if (MmTextField("##chat", g_chatIn, sizeof g_chatIn, RX0 + 16 + ox, 868, STK_BX0 - 12 + ox, 920, "Say something... (Tab)", g_chatFocus)) {
             if (g_chatIn[0]) net::RoomSay(g_chatIn);
             g_chatIn[0] = 0;
             g_chatFocus = true;   // stay in the field to keep talking
         } else g_chatFocus = false;
+        {   // build 127: the sticker button (a smiley)
+            bool hot = g_stkOpen || MmHover(STK_BX0, STK_BY0, STK_BX1, STK_BY1);
+            float bx0 = STK_BX0 + ox, bx1 = STK_BX1 + ox;
+            dl->AddRectFilled(CP(bx0, STK_BY0), CP(bx1, STK_BY1), hot ? MmRGBA(90, 14, 6) : MmC(P.bgTop, 0.9f), CV(6));
+            dl->AddRect(CP(bx0, STK_BY0), CP(bx1, STK_BY1), MmC(hot ? P.gold : P.acc, 0.85f * in), CV(6), 0, CV(hot ? 2.0f : 1.5f));
+            ImU32 ic = MmC(hot ? P.gold : P.dim, in);
+            float cx = (bx0 + bx1) / 2, cy = (STK_BY0 + STK_BY1) / 2;
+            dl->AddCircle(CP(cx, cy), CV(13), ic, 32, CV(2.5f));
+            dl->AddCircleFilled(CP(cx - 5, cy - 4), CV(2.2f), ic, 12);
+            dl->AddCircleFilled(CP(cx + 5, cy - 4), CV(2.2f), ic, 12);
+            dl->PathArcTo(CP(cx, cy + 1), CV(7), 0.35f, IM_PI - 0.35f, 14);
+            dl->PathStroke(ic, false, CV(2.5f));
+            if (MmClicked(STK_BX0, STK_BY0, STK_BX1, STK_BY1)) { g_stkOpen = !g_stkOpen; g_stkHov = -1; MM_SND |= g_stkOpen ? 2 : 4; }
+        }
         const float BM = (RX0 + RX1) / 2;   // two equal buttons, 16 apart
         if (seated) {   // build 112
             MmButton(dl, RX0 + ox, 972, BM - 8 + ox, 1036, R.myReady ? "NOT READY" : "READY", !R.myReady, T.pulse);
@@ -850,6 +918,41 @@ static void MmRoomFrame() {
         MmText(dl, g_fUi, 19, 50, 1040, MmC(P.faint), "X Invite   Y My setup   Tab Chat");
     }
     MmNoteDraw(dl, T.now, 50, 960);
+
+    // ---- build 127: the sticker picker, above the chat field ----
+    if (g_stkOpen) {
+        g_stkMask = false;   // the picker itself reacts to the mouse
+        const float x0 = STK_X0, y0 = STK_Y0, x1 = STK_X1, y1 = STK_Y1, CW = 112, CH = 104, GAP = 8, PAD = 24;
+        for (int k = 0; k < 4; k++)   // soft shadow
+            dl->AddRectFilled(CP(x0 - 4 - k * 4, y0 + 2 - k * 2), CP(x1 + 6 + k * 4, y1 + 10 + k * 4), MmRGBA(0, 0, 0, 0.16f), CV(10 + k * 4));
+        dl->AddRectFilled(CP(x0, y0), CP(x1, y1), MmC(P.bgBot, 1.0f), CV(8));
+        dl->AddRectFilled(CP(x0, y0), CP(x1, y1), MmC(P.panel, 0.95f), CV(8));
+        dl->AddRect(CP(x0, y0), CP(x1, y1), MmC(P.acc, 0.95f), CV(8), 0, CV(3));
+        dl->AddRect(CP(x0 + 5, y0 + 5), CP(x1 - 5, y1 - 5), MmC(P.gold, 0.45f), CV(6), 0, CV(1));
+        MmStickerTitle(dl, (x0 + x1) / 2, y0, "STICKERS");
+        int hov = -1;
+        for (int i = 0; i < net::ROOM_STICKERS; i++) {
+            float gx = x0 + PAD + (i % 5) * (CW + GAP), gy = y0 + PAD + 18 + (i / 5) * (CH + GAP);
+            if (MmHover(gx - 4, gy - 4, gx + CW + 4, gy + CH + 4)) hov = i;
+        }
+        if (hov != g_stkHov) { if (hov >= 0) MM_SND |= 1; g_stkHov = hov; }
+        for (int i = 0; i < net::ROOM_STICKERS; i++) {
+            float gx = x0 + PAD + (i % 5) * (CW + GAP), gy = y0 + PAD + 18 + (i / 5) * (CH + GAP);
+            float sw = CH * (1135.0f / 1050.0f);
+            if (i == hov) {
+                dl->AddRectFilled(CP(gx - 4, gy - 4), CP(gx + CW + 4, gy + CH + 4), MmRGBA(90, 14, 6), CV(8));
+                dl->AddRect(CP(gx - 4, gy - 4), CP(gx + CW + 4, gy + CH + 4), MmC(P.gold), CV(8), 0, CV(3));
+                float h2 = CH + 10, w2 = h2 * (1135.0f / 1050.0f);
+                MmSticker(dl, i, gx + (CW - w2) / 2, gy - 5, h2);
+            } else MmSticker(dl, i, gx + (CW - sw) / 2, gy, CH);
+        }
+        MmText(dl, g_fUi, 19, (x0 + x1) / 2, y1 - 20, MmC(P.faint), "Click a sticker to send  \xC2\xB7  click outside to close", 1);
+        if (hov >= 0 && io.MouseClicked[0]) {
+            if (T.now - g_stkLast < 2.0) MmNote("One sticker every 2 seconds");
+            else { net::RoomSticker(hov); g_stkLast = T.now; g_stkOpen = false; MM_SND |= 2; }
+        }
+    }
+    g_stkMask = false;
 
     // ---- invite friends panel ----
     if (g_invOpen) {

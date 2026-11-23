@@ -52,7 +52,7 @@ struct RoomMember {
     uint8_t chara, color, stage, assist[3];   // chara / stage 0xFF = random
     int game, wins[2];             // while playing: game number in the set, games won by 1P / 2P
 };
-struct ChatLine { uint32_t seq; uint64_t from; char name[48]; char text[200]; bool system; };
+struct ChatLine { uint32_t seq; uint64_t from; char name[48]; char text[200]; bool system; int sticker; };   // sticker: game chat stamp 0-24, -1 = text (build 127)
 struct RoomSettings { char name[48]; bool priv; int size, rounds, timer, setLen; };   // timer 0-3, setLen 0 = no limit
 struct RoomInvite { uint64_t lobby, from; char name[48]; uint32_t ms; };
 struct RoomView {
@@ -97,6 +97,8 @@ void RoomSetReady(bool on);
 void RoomSetMyData(const char* key, const char* val);   // other member data: "su" setup, "play", "sc" score
 void RoomStandIn(bool on);                   // [dev] room_standin=1: a test player sits across from you
 void RoomSystemLine(const char* text);       // a grey line in the room chat, only on this PC
+void RoomSticker(int n);                     // build 127: send one of the game's 25 chat stamps (0-24)
+static const int ROOM_STICKERS = 25;
 // ---- Build 113 ----
 void RoomKick(uint64_t member);
 // ---- Build 114 ----

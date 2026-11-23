@@ -348,13 +348,14 @@ static uint32_t g_callStart = 0;
 static uint64_t g_lastMembers[ROOM_MAX_MEMBERS];
 static int g_nLast = 0;
 
-static void ChatAdd(uint64_t from, const char* name, const char* text, bool system) {
+static void ChatAdd(uint64_t from, const char* name, const char* text, bool system, int sticker = -1) {
     // caller holds g_rlock
     if (RV.nChat == ROOM_CHAT_LINES) { memmove(&RV.chat[0], &RV.chat[1], sizeof RV.chat[0] * (ROOM_CHAT_LINES - 1)); RV.nChat--; }
     ChatLine& c = RV.chat[RV.nChat++];
     c.seq = ++RV.chatSeq;
     c.from = from;
     c.system = system;
+    c.sticker = sticker;
     snprintf(c.name, sizeof c.name, "%s", name ? name : "");
     snprintf(c.text, sizeof c.text, "%s", text ? text : "");
 }
@@ -390,6 +391,15 @@ static void OnChat(const void* pv) {
     if (n <= 0 || type != 1) return;   // 1 = chat message
     buf[n] = 0;
     if (buf[0] == 1) {                 // build 113: our own messages, not shown
+        int stk = -1;
+        if (sscanf(buf + 1, "STK:%d", &stk) == 1) {   // build 127: a chat sticker (the game's stamps)
+            if (stk < 0 || stk >= ROOM_STICKERS) return;
+            char name[48];
+            snprintf(name, sizeof name, "%s", SteamFriendName(who));
+            RLock l;
+            ChatAdd(who, name, "", false, stk);
+            return;
+        }
         unsigned long long target = 0;
         if (sscanf(buf + 1, "KICK:%llu", &target) == 1) {
             uint64_t owner = pGetLobbyOwner(g_mm, m->lobby);
@@ -904,6 +914,7 @@ void RoomSearch() { RQLOCK RQ.search = true; RV.searching = true; }
 void RoomJoin(uint64_t lobby) { RQLOCK RQ.join = lobby; if (lobby != RV.id) { RV.state = ROOM_JOINING; RV.err[0] = 0; } }
 void RoomLeave() { RQLOCK RQ.leave = true; RQ.create = false; RQ.join = 0; RV.state = ROOM_NONE; }
 void RoomSay(const char* text) { RQLOCK if (RQ.nSay < 8 && text && *text) snprintf(RQ.say[RQ.nSay++], 200, "%s", text); }
+void RoomSticker(int n) { RQLOCK if (RQ.nSay < 8 && n >= 0 && n < ROOM_STICKERS) snprintf(RQ.say[RQ.nSay++], 200, "\x01STK:%d", n); }
 void RoomInviteFriend(uint64_t f) { RQLOCK RQ.invite = f; }
 void RoomRefreshFriends() { RQLOCK RQ.friends = true; }
 void RoomDropInvite() { RQLOCK RV.haveInvite = false; }
