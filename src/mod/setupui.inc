@@ -1019,37 +1019,69 @@ static void SuPanel(ImDrawList* dl, float x0, float y0, float in) {
 }
 // build 112: My setup as one row (the room's MY MATCH SETTINGS bar)
 static int SuPortraitOf(int chara) { return chara >= 0 && chara < SU_NCHAR ? SU_PORTRAIT[chara] : 48; }
+// build 127d: five columns like the approved mock-up (ux/match-settings): every title left-aligned at its
+// section's start, the same padding on both sides of each divider, Y EDIT centred in the last column.
 static void SuRoomPanel(ImDrawList* dl, float x0, float y0, float x1, float y1, float in) {
     const MmPal& P = MmP();
     SuLoad();
     bool rnd = SU.chara == SU_RANDOM;
-    MmImg(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[SU.chara], x0 + 20, y0 + 13, 70, 102, MmRGBA(255, 255, 255, in));
-    float cy = (y0 + y1) / 2;
-    MmText(dl, g_fMenu, 11, x0 + 106, cy - 20, MmC(P.faint, in), "CHARACTER");
+    const float PAD = 18, LY = y0 + 28, NY = y0 + 64, SY = y0 + 95;   // titles, values, second lines
+    const float wSt = 84 + 14 + 96, wKn = 3 * 62 + 2 * 6, wDl = 62, wEd = 40;
+    float ix0 = x0 + 6, ix1 = x1 - 6;
+    float wCh = (ix1 - ix0) - (wSt + wKn + wDl + wEd) - 2 * PAD * 5;
+    float w[5] = {wCh, wSt, wKn, wDl, wEd}, sx[5];
+    float x = ix0;
+    for (int k = 0; k < 5; k++) {
+        sx[k] = x + PAD; x += w[k] + 2 * PAD;
+        if (k < 4) dl->AddLine(CP(x, y0 + 20), CP(x, y1 - 14), MmRGBA(150, 110, 60, 0.8f * in), CV(1));
+    }
+    ImU32 frameCol = MmRGBA(214, 170, 82, in), white = MmRGBA(255, 255, 255, in);
+    // 1 character: face, name, colour
+    x = sx[0];
+    MmText(dl, g_fMenu, 11, x, LY, MmC(P.faint, in), "CHARACTER");
+    {
+        int spr = rnd ? 48 : SU_PORTRAIT[SU.chara];
+        ImVec2 ts(1, 1);
+        art::Get("MA10_CSEL", spr, &ts);
+        float v0 = 0.05f, v1 = v0 + (ts.y > 0 ? ts.x / ts.y : 0.68f);   // a square from the top of the portrait
+        MmImg(dl, "MA10_CSEL", spr, x, y0 + 46, 60, 60, white, ImVec2(0, v0), ImVec2(1, v1 > 1 ? 1 : v1));
+        dl->AddRect(CP(x, y0 + 46), CP(x + 60, y0 + 106), frameCol, 0, 0, CV(1));
+    }
+    float tx = x + 74, tw = sx[0] + w[0] - tx;
     const char* nm = rnd ? "Random" : SU_CHARS[SU.chara];
-    MmText(dl, g_fUiBold, strlen(nm) > 16 ? 19.0f : 25.0f, x0 + 106, cy + 10, MmC(P.text, in), nm);
-    float x = x0 + 336;
-    MmText(dl, g_fMenu, 11, x, cy - 20, MmC(P.faint, in), "COLOUR");
-    dl->AddRectFilled(CP(x, cy - 2), CP(x + 26, cy + 24), MmC(P.bgTop, in), CV(4));
-    if (!rnd) SuHead(dl, SU.chara, SuColor(), x, cy - 2, 26, 26);
-    dl->AddRect(CP(x, cy - 2), CP(x + 26, cy + 24), MmRGBA(255, 210, 110, in), CV(4), 0, CV(2));
+    float px = 25;
+    while (px > 16 && g_fUiBold->CalcTextSizeA(CV(px * MmEm(g_fUiBold)), FLT_MAX, 0.0f, nm).x / g_cv > tw) px -= 1;
+    MmText(dl, g_fUiBold, px, tx, NY, MmC(P.text, in), nm);
+    dl->AddRectFilled(CP(tx, y0 + 84), CP(tx + 22, y0 + 106), MmC(P.bgTop, in), CV(3));
+    if (!rnd) SuHead(dl, SU.chara, SuColor(), tx, y0 + 84, 22, 22);
+    dl->AddRect(CP(tx, y0 + 84), CP(tx + 22, y0 + 106), MmRGBA(255, 210, 110, in), CV(3), 0, CV(1.5f));
     char c[24];
     if (rnd) snprintf(c, sizeof c, "Random"); else snprintf(c, sizeof c, "Colour %d", SuColor() + 1);
-    MmText(dl, g_fUi, 21, x + 36, cy + 11, MmC(P.dim, in), c);
-    x = x0 + 470;
-    MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, x, cy - 29, 90, 57, MmRGBA(255, 255, 255, in));
-    dl->AddRect(CP(x, cy - 29), CP(x + 90, cy + 28), MmRGBA(214, 170, 82, in), 0, 0, CV(1));
-    x -= 10;
-    MmText(dl, g_fMenu, 11, x + 114, cy - 20, MmC(P.faint, in), "STAGE");
+    MmText(dl, g_fUi, 20, tx + 30, SY, MmC(P.dim, in), c);
+    // 2 stage
+    x = sx[1];
+    MmText(dl, g_fMenu, 11, x, LY, MmC(P.faint, in), "STAGE");
+    MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, x, y0 + 49, 84, 54, white);
+    dl->AddRect(CP(x, y0 + 49), CP(x + 84, y0 + 103), frameCol, 0, 0, CV(1));
     char st[24];
     if (SU.stage == SU_RANDOM) snprintf(st, sizeof st, "Random"); else snprintf(st, sizeof st, "Stage %02d", SU.stage + 1);
-    MmText(dl, g_fUiBold, 25, x + 114, cy + 10, MmC(P.text, in), st);
-    x = x0 + 676;
-    MmText(dl, g_fMenu, 11, x, cy - 26, MmC(P.faint, in), "SUPPORT KNIGHTS");
-    MmText(dl, g_fUiBold, 21, x, cy + 0, MmC(P.text, in), SuInUse().name);
-    for (int k = 0; k < 3; k++) SuSmallCard(dl, x + k * 64, cy + 16, 60.0f / 192, SuInUse().a[k], false, in);
-    MmPadButton(dl, x1 - 56, cy - 28, 'Y', MmRGBA(210, 170, 20, in));
-    MmText(dl, g_fMenu, 10, x1 - 38, cy + 26, MmC(P.text, in), "EDIT", 1);
+    MmText(dl, g_fUiBold, 25, x + 98, NY, MmC(P.text, in), st);
+    MmText(dl, g_fUi, 20, x + 98, SY, MmC(P.dim, in), "Your pick");
+    // 3 support knights
+    x = sx[2];
+    MmText(dl, g_fMenu, 11, x, LY, MmC(P.faint, in), "SUPPORT KNIGHTS");
+    MmText(dl, g_fUiBold, 25, x, NY, MmC(P.text, in), SuInUse().name);
+    for (int k = 0; k < 3; k++) SuSmallCard(dl, x + k * 68, y0 + 82, 62.0f / 192, SuInUse().a[k], false, in);
+    // 4 input delay (rollback.ini [net] input_delay, from the next match)
+    x = sx[3];
+    MmText(dl, g_fMenu, 11, x, LY, MmC(P.faint, in), "DELAY");
+    char dn[8]; snprintf(dn, sizeof dn, "%d", g_ncfg.delay);
+    MmText(dl, g_fMenu, 26, x, NY + 1, MmC(P.gold, in), dn, 0, 2, MmC(P.ink, in));
+    MmText(dl, g_fUi, 20, x, SY, MmC(P.dim, in), g_ncfg.delay == 1 ? "frame" : "frames");
+    // 5 edit, centred in its column
+    float cx = sx[4] + w[4] / 2, cy = (y0 + y1) / 2;
+    MmPadButton(dl, cx - 18, cy - 30, 'Y', MmRGBA(210, 170, 20, in));
+    MmText(dl, g_fMenu, 10, cx, cy + 24, MmC(P.text, in), "EDIT", 1);
 }
 // open My setup (main menu / room): the summary once the steps were walked through, else step 1
 static void SuOpen() {
