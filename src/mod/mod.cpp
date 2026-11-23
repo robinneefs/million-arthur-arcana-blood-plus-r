@@ -3775,6 +3775,14 @@ static bool g_rbWant = false, g_rbOn = false, g_rbStarted = false;
 static const uint32_t RB_NONE = 0xFFFFFFFFu;
 static uint32_t g_rbStart = 0;              // first frame a rewind can go back to
 static uint32_t g_rbConf = 0;               // all frames before this have the remote player's real input
+// Build 123b (test 123: a 1.7 s freeze at the start of every in-place rematch, also in build 122):
+// the game's in-place restart (rematch, phase 8 state 11 -> phase 0) is one very heavy frame
+// (~1 s: it rebuilds the fight). The replay check then ran it again (+0.6 s), and a rollback over
+// it would too. While g_rbBarrier is set (boot.inc: from state 11 until the fight has restarted),
+// every frame waits until the other player's input for it is in (a few ms in step), and nothing
+// before it can be rewound to; after the restart, rollbacks and checks start after that frame.
+static bool g_rbBarrier = false;
+static uint32_t g_rbBarrierWaits = 0;
 static uint32_t g_rbLast[2] = {0, 0};       // remote player's newest real input (the guess for later frames)
 static int g_rbRemote = 0;                  // 0 = player 1, 1 = player 2
 static uint32_t g_rbWrong = RB_NONE;
@@ -4321,6 +4329,7 @@ static bool SyncTestStart() {
         g_rbFrozen = false;
         g_rbFrozenIgnored = 0;
         g_rbStarted = false;
+        g_rbBarrier = false;           // build 123b
         g_rbWrong = RB_NONE;
         g_rbLast[0] = g_rbLast[1] = 0;
         g_rbRemote = NetOn() ? NetRemoteSide() : g_cfg.fakeRemote - 1;
@@ -4950,6 +4959,17 @@ static uint32_t RollbackFrame(void* scene) {
         HudStall();                  // build 109
         SetStatus("ROLLBACK TEST | waiting for input");
         return 0;
+    }
+    if (g_rbBarrier && g_rbStarted) {             // build 123b: in step over the fight's restart
+        if (g_rbConf <= F) {
+            if (g_pend.valid && g_pend.frame == F) WriteRanges(g_pend.pre);
+            g_pend.valid = false;
+            g_frame--;
+            g_rbStalls++;
+            g_rbBarrierWaits++;
+            return 0;
+        }
+        if (g_rbStart < F) g_rbStart = F;        // no rewinds to before this frame (all of it is real input)
     }
     g_stage = 1;
     ReleaseFrees(g_journals[slot]);

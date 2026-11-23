@@ -343,6 +343,7 @@ static void Request(const MatchSettings& ms) {
 
 // Build 107: a fight starts (from the loading screen, or again in place after a rematch)
 static void FightStarts() {
+    g_rbBarrier = false;                 // build 123b
     HudResetMatch();                     // build 109: stutters count per match
     postFight = false;
     answerNo = false;
@@ -519,8 +520,18 @@ static void Tick() {
                 restarting = true;
                 Log("boot: fight frame %u: the game took the rematch (phase %d)", stateFrames, (int)ph);
             }
+            if (restarting && ph == 8 && fs == 11 && !g_rbBarrier) {   // build 123b: the heavy restart frame is next
+                g_rbBarrier = true;
+                g_rbBarrierWaits = 0;
+                Log("boot: fight frame %u: the restart is next; frames run in step until it is done", stateFrames);
+            }
             if (restarting && ph != 8) {   // build 107b: our screen (and the hidden boxes) stay until the game restarts
                 restarting = false;
+                if (g_rbBarrier) {         // build 123b: rollbacks and checks start after the restart frame
+                    g_rbBarrier = false;
+                    if (g_rbStarted && g_rbStart < g_frame) g_rbStart = g_frame;   // (its input was all real: never re-run)
+                    Log("boot: restart done at frame %u; waited %u times for input in step; rollbacks start after it", g_frame, g_rbBarrierWaits);
+                }
                 rmYesHold = false;         // build 122
                 Log("boot: fight frame %u: the fight starts again in place (phase %d)", stateFrames, (int)ph);
                 g_postOn = false;
