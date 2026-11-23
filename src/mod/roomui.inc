@@ -528,12 +528,23 @@ static int g_invSel = 0;
 // build 127: chat stickers (the game's 25 chat stamps, MA10_CS_NETWORK 0 = a 5 x 5 sheet), mouse only for now
 static bool g_stkOpen = false;
 static int g_stkHov = -1;
+static int g_stkSel = 0;          // build 127h: the picker's controller cursor
+// build 127h: the room with a controller: LB / RB switch between three areas
+static int g_zone = 1;            // 0 room settings + players (host only), 1 tables, 2 chat
+static int g_zSel = 0;            // area 0: rows 0-3 settings, 4+ players
+static uint64_t g_kickArm = 0;    // build 113: a second press within 3 s removes the player
+static double g_kickAt = 0;
+static const char* const MM_ZONES[3] = {"SETTINGS", "TABLES", "CHAT"};
 static double g_stkLast = -10;
 static const float STK_BX0 = 1802, STK_BX1 = 1852, STK_BY0 = 868, STK_BY1 = 920;   // the smiley button next to the chat field
 static void MmSticker(ImDrawList* dl, int n, float x, float y, float h, ImU32 tint = IM_COL32_WHITE) {
     float w = h * (1135.0f / 5) / (1050.0f / 5);
     int r = n / 5, c = n % 5;
     MmImg(dl, "MA10_CS_NETWORK", 0, x, y, w, h, tint, ImVec2(c / 5.0f, r / 5.0f), ImVec2((c + 1) / 5.0f, (r + 1) / 5.0f));
+}
+static void MmStickerSend(int n, double now) {
+    if (now - g_stkLast < 2.0) { MmNote("One sticker every 2 seconds"); return; }
+    net::RoomSticker(n); g_stkLast = now; g_stkOpen = false; MM_SND |= 2;
 }
 // the title on the picker's top edge: a small crimson plate with gold edges and diamonds
 static void MmStickerTitle(ImDrawList* dl, float cx, float cy, const char* t, float a = 1.0f) {
@@ -568,7 +579,7 @@ static void MmStickerTitle(ImDrawList* dl, float cx, float cy, const char* t, fl
 }
 static void MmRoomFrame() {
     const MmPal& P = MmP();
-    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_invOpen = false; g_stkOpen = false; g_seatSel = g_rv.mySeat >= 0 ? g_rv.mySeat : 0; }
+    if (MM.roomT < 0) { MM.roomT = ImGui::GetTime(); g_invOpen = false; g_stkOpen = false; g_zone = 1; g_zSel = 0; g_seatSel = g_rv.mySeat >= 0 ? g_rv.mySeat : 0; }
     MmT T = MmTimes(MM.roomT);
     ImGuiIO& io = ImGui::GetIO();
     bool typing = io.WantTextInput;
@@ -601,6 +612,12 @@ static void MmRoomFrame() {
     if (g_stkOpen && (g_invOpen || !inRoom)) g_stkOpen = false;
     if (g_stkOpen) {
         if (nav.b || io.MouseClicked[1]) { g_stkOpen = false; MM_SND |= 4; nav = MmNav(); io.MouseClicked[1] = false; }
+        else if (!typing && (nav.dx || nav.dy || nav.a)) {   // build 127h: controller in the picker
+            int c = g_stkSel % 5 + nav.dx, r = g_stkSel / 5 + nav.dy;
+            if (c >= 0 && c < 5 && r >= 0 && r < 5 && (nav.dx || nav.dy)) { g_stkSel = r * 5 + c; MM_SND |= 1; }
+            if (nav.a) MmStickerSend(g_stkSel, T.now);
+            nav = MmNav();
+        } else if (!typing) { bool x = nav.x, y = nav.y; nav = MmNav(); nav.x = x; nav.y = y; nav.lb = false; }
         else if (io.MouseClicked[0] && !MmMouseIn(STK_X0, STK_Y0 - 24, STK_X1, STK_Y1) && !MmMouseIn(STK_BX0, STK_BY0, STK_BX1, STK_BY1)) {
             g_stkOpen = false; MM_SND |= 4; io.MouseClicked[0] = false;
         }
@@ -615,6 +632,25 @@ static void MmRoomFrame() {
         else nav = MmNav();
     }
     if (nav.x && !typing) { g_invOpen = true; g_invSel = 0; net::RoomRefreshFriends(); MM_SND |= 2; }
+    // ---- build 127h: areas (LB / RB), and the controller in the settings and chat areas ----
+    if (g_zone == 0 && !isHost) g_zone = 1;
+    if (!typing && !g_invOpen && (nav.lb || nav.rb)) {
+        int z = g_zone + (nav.rb ? 1 : -1);
+        if (z == 0 && !isHost) z = g_zone;   // guests have nothing to change there
+        if (z >= 0 && z <= 2 && z != g_zone) { g_zone = z; g_zSel = 0; g_stkOpen = false; MM_SND |= 1; }
+    }
+    int zDir = 0; bool zA = false, zoneB = false;
+    if (!typing && !g_invOpen && g_zone != 1) {
+        int nPl = R.nMembers > 7 ? 6 : R.nMembers;
+        if (g_zone == 0) {
+            int rows = 4 + nPl;
+            if (nav.dy) { int s2 = ImClamp(g_zSel + nav.dy, 0, rows - 1); if (s2 != g_zSel) { g_zSel = s2; MM_SND |= 1; } }
+            zDir = nav.dx; zA = nav.a;
+        } else if (nav.a && !g_stkOpen) { g_stkOpen = true; g_stkHov = -1; MM_SND |= 2; }
+        if (nav.b && !g_stkOpen) { g_zone = 1; MM_SND |= 4; zoneB = true; }
+        bool b = nav.b && zoneB, x = nav.x, y = nav.y;
+        nav = MmNav(); nav.b = b; nav.x = x; nav.y = y;   // B still starts "hold to leave"
+    }
     // build 112: the seat cursor (columns: A1P A2P B1P B2P, rows: A/B over C/D)
     int nTables = ImClamp(R.set.size / 2, 1, 4), nSeats = nTables * 2;
     if (g_seatSel >= nSeats) g_seatSel = 0;
@@ -638,12 +674,14 @@ static void MmRoomFrame() {
 #ifndef UI_HARNESS
         if (U.capture.load() && (U.navBits & PB_B)) bDown = true;
 #endif
-        if (nav.b && bStart < 0) bStart = T.now;
+        static bool bQuiet = false;   // build 127h: B that only left an area does nothing more on release
+        if (nav.b && bStart < 0) { bStart = T.now; bQuiet = zoneB; }
         if (bStart >= 0) {
             hold = (float)(T.now - bStart);
             if (!bDown) {
                 bStart = -1;
-                if (seated && RmViewState() != 2) { net::RoomSit(-1); MM_SND |= 4; }   // build 112: B stands up
+                if (bQuiet) {}
+                else if (seated && RmViewState() != 2) { net::RoomSit(-1); MM_SND |= 4; }   // build 112: B stands up
                 else MmNote("Hold B to leave the room");
             }
             if (hold >= 1.0f) { bStart = -1; net::RoomLeave(); MM_SND |= 4; MmGoMenu(); return; }
@@ -709,13 +747,15 @@ static void MmRoomFrame() {
         for (int i = 0; i < 5; i++) {
             float y = 214 + i * 44;
             bool can = isHost && i < 4;
-            bool hov = can && MmHover(LX0 + 10, y - 22, LX1 - 10, y + 22);
+            bool padOn = can && g_zone == 0 && g_zSel == i;   // build 127h
+            bool hov = can && (MmHover(LX0 + 10, y - 22, LX1 - 10, y + 22) || padOn);
             if (hov) MmImg(dl, "MA10_CMN", 83, LX0 + 8 + ox, y - 22, LX1 - LX0 - 16, 44, MmGlowCol(P.glow, 0.30f * in), ImVec2(0, 0), ImVec2(1, 1), true);
             MmText(dl, g_fMenu, 14, LX0 + 24 + ox, y, MmC(P.dim, in), rows[i]);
             MmText(dl, g_fUiBold, 27, LX1 - 24 + ox, y, hov ? MmC(P.gold, in) : MmC(P.text, in), v[i], 2);
             if (i < 4) MmLine(dl, LX0 + 20 + ox, y + 22, LX1 - LX0 - 40, 1, MmC(P.acc, 0.5f * in));
-            if (hov && (io.MouseClicked[0] || io.MouseClicked[1])) {
-                int dir = io.MouseClicked[1] ? -1 : 1;
+            int pdir = padOn ? (zDir ? zDir : zA ? 1 : 0) : 0;
+            if (pdir || (hov && !padOn && (io.MouseClicked[0] || io.MouseClicked[1])) || (padOn && MmHover(LX0 + 10, y - 22, LX1 - 10, y + 22) && (io.MouseClicked[0] || io.MouseClicked[1]))) {
+                int dir = pdir ? pdir : io.MouseClicked[1] ? -1 : 1;
                 if (i == 0) ch.rounds = MmStep(ch.rounds, dir, 1, 5);
                 if (i == 1) ch.timer = MmStep(ch.timer, dir, 0, 3);
                 if (i == 2) ch.setLen = MmStep(ch.setLen, dir, 0, 10);
@@ -724,7 +764,7 @@ static void MmRoomFrame() {
             }
         }
         if (changed) { net::RoomChange(ch); MM_SND |= 1; }
-        MmText(dl, g_fUi, 19, LX0 + 24 + ox, 426, MmC(P.faint, in), isHost ? "You are the host: click a setting or a player" : "Only the host can change these");
+        MmText(dl, g_fUi, 19, LX0 + 24 + ox, 426, MmC(P.faint, in), isHost ? "You are the host: click, or LB to change with a pad" : "Only the host can change these");
 
         MmSection(dl, LX0 + ox, 514, LX1 + ox, 940, "PLAYERS", in);
         int shown = R.nMembers > 7 ? 6 : R.nMembers;   // build 120h: 7 rows; with 8 players the 7th says "+ 2 more"
@@ -738,14 +778,15 @@ static void MmRoomFrame() {
         if (m.seat >= 0) snprintf(where, sizeof where, "%s %c", m.playing ? "PLAYING" : "TABLE", 'A' + m.seat / 2);
         else snprintf(where, sizeof where, "%s", m.me ? "YOU" : "IN ROOM");
         // build 113: the host clicks a player to remove them (a second click within 3 s confirms)
-        static uint64_t kickArm = 0;
-        static double kickAt = 0;
+        // build 127h: or moves to them in the settings area and presses A (twice)
         bool canKick = isHost && !m.me && !m.standin && !g_invOpen;
-        bool hovK = canKick && MmHover(LX0 + 10, y - 24, LX1 - 10, y + 24);
-        bool armed = kickArm == m.id && T.now - kickAt < 3.0;
-        if (hovK && io.MouseClicked[0]) {
-            if (armed) { net::RoomKick(m.id); kickArm = 0; MM_SND |= 4; }
-            else { kickArm = m.id; kickAt = T.now; MM_SND |= 1; armed = true; }
+        bool padP = isHost && g_zone == 0 && g_zSel == 4 + k;
+        if (padP) dl->AddRect(CP(LX0 + 12 + ox, y - 23), CP(LX1 - 12 + ox, y + 23), MmC(P.gold, 0.9f * in), CV(6), 0, CV(2));
+        bool hovK = canKick && (MmHover(LX0 + 10, y - 24, LX1 - 10, y + 24) || padP);
+        bool armed = g_kickArm == m.id && T.now - g_kickAt < 3.0;
+        if ((hovK && io.MouseClicked[0] && MmHover(LX0 + 10, y - 24, LX1 - 10, y + 24)) || (padP && canKick && zA)) {
+            if (armed) { net::RoomKick(m.id); g_kickArm = 0; MM_SND |= 4; }
+            else { g_kickArm = m.id; g_kickAt = T.now; MM_SND |= 1; armed = true; MmNote("Press again to remove them from the room"); }
         }
         if (armed) MmPill(dl, LX1 - 70 + ox, y, 96, 26, "KICK?", MmRgb{230, 70, 60}, true, in);
         else if (hovK) MmPill(dl, LX1 - 70 + ox, y, 96, 26, "KICK", MmRgb{230, 70, 60}, false, in);
@@ -890,7 +931,7 @@ static void MmRoomFrame() {
             g_chatFocus = true;   // stay in the field to keep talking
         } else g_chatFocus = false;
         {   // build 127: the sticker button (a smiley)
-            bool hot = g_stkOpen || MmHover(STK_BX0, STK_BY0, STK_BX1, STK_BY1);
+            bool hot = g_stkOpen || g_zone == 2 || MmHover(STK_BX0, STK_BY0, STK_BX1, STK_BY1);
             float bx0 = STK_BX0 + ox, bx1 = STK_BX1 + ox;
             dl->AddRectFilled(CP(bx0, STK_BY0), CP(bx1, STK_BY1), hot ? MmRGBA(90, 14, 6) : MmC(P.bgTop, 0.9f), CV(6));
             dl->AddRect(CP(bx0, STK_BY0), CP(bx1, STK_BY1), MmC(hot ? P.gold : P.acc, 0.85f * in), CV(6), 0, CV(hot ? 2.0f : 1.5f));
@@ -921,13 +962,46 @@ static void MmRoomFrame() {
     {   // build 112
         const net::RoomMember* o = MmSeatOwner(R, g_seatSel);
         const char* aText = g_seatSel == R.mySeat ? (R.myReady ? "Not ready" : "Ready") : o ? "" : seated ? "Move" : "Sit";
+        const char* bText = seated ? "Stand up" : "Hold: leave";
+        if (g_zone == 0) { aText = g_zSel < 4 ? "Change" : "Remove"; bText = "Tables"; }   // build 127h
+        else if (g_zone == 2) { aText = g_stkOpen ? "Send" : "Stickers"; bText = g_stkOpen ? "Close" : "Tables"; }
         float x = 50;
         if (aText[0]) { MmPadButton(dl, x, 984, 'A', MmRGBA(40, 160, 70)); MmText(dl, g_fMenu, 13, x + 44, 1002, MmC(P.text), aText); x += 150; }
         MmPadButton(dl, x, 984, 'B', MmRGBA(190, 40, 40));
-        MmText(dl, g_fMenu, 13, x + 44, 1002, MmC(P.text), seated ? "Stand up" : "Hold: leave");
+        MmText(dl, g_fMenu, 13, x + 44, 1002, MmC(P.text), bText);
         MmText(dl, g_fUi, 19, 50, 1040, MmC(P.faint), "X Invite   Y My setup   Tab Chat");
     }
     MmNoteDraw(dl, T.now, 50, 960);
+
+    // ---- build 127h: the active area (gold frame, the others dimmed) + the LB / RB tab strip ----
+    {
+        static const float ZR[3][4] = {{40, 150, 480, 950}, {490, 150, 1430, 896}, {1440, 150, 1880, 950}};
+        if (g_zone != 1)
+            for (int z = 0; z < 3; z++)
+                if (z != g_zone) dl->AddRectFilled(CP(ZR[z][0], ZR[z][1]), CP(ZR[z][2], ZR[z][3]), MmC(P.bgBot, 0.32f), CV(12));
+        const float* r = ZR[g_zone];
+        dl->AddRect(CP(r[0], r[1]), CP(r[2], r[3]), MmC(P.gold, 0.45f + 0.25f * T.pulse), CV(12), 0, CV(2));
+        const float cy = 1060;
+        float wz[3], tot = 0;
+        for (int z = 0; z < 3; z++) { wz[z] = g_fMenu->CalcTextSizeA(CV(13 * MmEm(g_fMenu)), FLT_MAX, 0.0f, MM_ZONES[z]).x / g_cv; tot += wz[z]; }
+        const float gap = 36, pw = 44;
+        float x = 960 - (tot + 2 * gap + 2 * (pw + 18)) / 2;
+        auto pill = [&](float px, const char* t) {
+            dl->AddRectFilled(CP(px, cy - 12), CP(px + pw, cy + 12), MmRGBA(60, 16, 12, 0.9f), CV(12));
+            dl->AddRect(CP(px, cy - 12), CP(px + pw, cy + 12), MmC(P.dim, 0.8f), CV(12), 0, CV(1.5f));
+            MmText(dl, g_fMenu, 11, px + pw / 2, cy, MmC(P.text), t, 1);
+        };
+        pill(x, "LB"); x += pw + 18;
+        for (int z = 0; z < 3; z++) {
+            bool off = z == 0 && !isHost, on = z == g_zone;
+            MmText(dl, g_fMenu, 13, x, cy, on ? MmC(P.gold) : MmC(P.faint, off ? 0.4f : 1.0f), MM_ZONES[z]);
+            if (on) dl->AddLine(CP(x, cy + 13), CP(x + wz[z], cy + 13), MmC(P.gold), CV(2));
+            if (!off && !on && MmClicked(x - 8, cy - 16, x + wz[z] + 8, cy + 16)) { g_zone = z; g_zSel = 0; g_stkOpen = false; MM_SND |= 1; }
+            x += wz[z];
+            if (z < 2) { MmText(dl, g_fMenu, 13, x + gap / 2, cy, MmC(P.faint), "\xC2\xB7", 1); x += gap; }
+        }
+        x += 18; pill(x, "RB");
+    }
 
     // ---- build 127: the sticker picker, above the chat field ----
     if (g_stkOpen) {
@@ -945,22 +1019,19 @@ static void MmRoomFrame() {
             float gx = x0 + PAD + (i % 5) * (CW + GAP), gy = y0 + PAD + 18 + (i / 5) * (CH + GAP);
             if (MmHover(gx - 4, gy - 4, gx + CW + 4, gy + CH + 4)) hov = i;
         }
-        if (hov != g_stkHov) { if (hov >= 0) MM_SND |= 1; g_stkHov = hov; }
+        if (hov != g_stkHov) { if (hov >= 0 && hov != g_stkSel) MM_SND |= 1; g_stkHov = hov; if (hov >= 0) g_stkSel = hov; }
         for (int i = 0; i < net::ROOM_STICKERS; i++) {
             float gx = x0 + PAD + (i % 5) * (CW + GAP), gy = y0 + PAD + 18 + (i / 5) * (CH + GAP);
             float sw = CH * (1135.0f / 1050.0f);
-            if (i == hov) {
+            if (i == g_stkSel) {
                 dl->AddRectFilled(CP(gx - 4, gy - 4), CP(gx + CW + 4, gy + CH + 4), MmRGBA(90, 14, 6), CV(8));
                 dl->AddRect(CP(gx - 4, gy - 4), CP(gx + CW + 4, gy + CH + 4), MmC(P.gold), CV(8), 0, CV(3));
                 float h2 = CH + 10, w2 = h2 * (1135.0f / 1050.0f);
                 MmSticker(dl, i, gx + (CW - w2) / 2, gy - 5, h2);
             } else MmSticker(dl, i, gx + (CW - sw) / 2, gy, CH);
         }
-        MmText(dl, g_fUi, 19, (x0 + x1) / 2, y1 - 20, MmC(P.faint), "Click a sticker to send  \xC2\xB7  click outside to close", 1);
-        if (hov >= 0 && io.MouseClicked[0]) {
-            if (T.now - g_stkLast < 2.0) MmNote("One sticker every 2 seconds");
-            else { net::RoomSticker(hov); g_stkLast = T.now; g_stkOpen = false; MM_SND |= 2; }
-        }
+        MmText(dl, g_fUi, 19, (x0 + x1) / 2, y1 - 20, MmC(P.faint), "A or click: send  \xC2\xB7  B or click outside: close", 1);
+        if (hov >= 0 && io.MouseClicked[0]) MmStickerSend(hov, T.now);
     }
     g_stkMask = false;
 
