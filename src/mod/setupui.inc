@@ -339,7 +339,7 @@ static void SuSmallCard(ImDrawList* dl, float x, float y, float sc, int a, bool 
     if (dim) dl->AddRectFilled(CP(x, y), CP(x + 192 * sc, y + 77 * sc), MmRGBA(10, 0, 0, 0.22f * alpha), rnd);
 }
 // the head of the character in one colour (for the colour squares)
-static void SuHead(ImDrawList* dl, int chara, int colour, float x, float y, float w, float h) {
+static void SuHead(ImDrawList* dl, int chara, int colour, float x, float y, float w, float h, ImU32 tint = IM_COL32_WHITE) {
     float hb[4] = {0.3f, 0, 0.64f, 0.2f};
     ImVec2 ss(0, 0);
     void* tex = art::GetChara(chara, colour, &ss, hb);
@@ -357,7 +357,7 @@ static void SuHead(ImDrawList* dl, int chara, int colour, float x, float y, floa
         if (hb[0] < 0) { hb[2] -= hb[0]; hb[0] = 0; }
         if (hb[2] > 1) { hb[0] = ImMax(0.0f, hb[0] - (hb[2] - 1)); hb[2] = 1; }
     }
-    SuTex(dl, tex, x, y, w, h, ImVec2(hb[0], hb[1]), ImVec2(hb[2], hb[3]));
+    SuTex(dl, tex, x, y, w, h, ImVec2(hb[0], hb[1]), ImVec2(hb[2], hb[3]), tint);
 }
 // the fight sprite in its colour, standing on the stage picture (preview box)
 static void SuStagePreview(ImDrawList* dl, float x0, float y0, float x1, float y1, int chara, int colour, int stage) {
@@ -1019,7 +1019,7 @@ static void SuPanel(ImDrawList* dl, float x0, float y0, float x1, float in) {
     while (px > 16 && SuTW(g_fUiBold, px, nm) > tw) px -= 1;
     MmText(dl, g_fUiBold, px, tx, y0 + 78, MmC(P.text, in), nm);
     dl->AddRectFilled(CP(tx, y0 + 96), CP(tx + 24, y0 + 120), MmC(P.bgTop, in), CV(3));
-    if (!rnd) SuHead(dl, SU.chara, SuColor(), tx, y0 + 96, 24, 24);
+    if (!rnd) SuHead(dl, SU.chara, SuColor(), tx, y0 + 96, 24, 24, white);
     dl->AddRect(CP(tx, y0 + 96), CP(tx + 24, y0 + 120), MmRGBA(255, 210, 110, in), CV(3), 0, CV(1.5f));
     char c[24];
     if (rnd) snprintf(c, sizeof c, "Random colour"); else snprintf(c, sizeof c, "Colour %d", SuColor() + 1);
@@ -1081,7 +1081,7 @@ static void SuRoomPanel(ImDrawList* dl, float x0, float y0, float x1, float y1, 
     while (px > 16 && g_fUiBold->CalcTextSizeA(CV(px * MmEm(g_fUiBold)), FLT_MAX, 0.0f, nm).x / g_cv > tw) px -= 1;
     MmText(dl, g_fUiBold, px, tx, NY, MmC(P.text, in), nm);
     dl->AddRectFilled(CP(tx, y0 + 84), CP(tx + 22, y0 + 106), MmC(P.bgTop, in), CV(3));
-    if (!rnd) SuHead(dl, SU.chara, SuColor(), tx, y0 + 84, 22, 22);
+    if (!rnd) SuHead(dl, SU.chara, SuColor(), tx, y0 + 84, 22, 22, white);
     dl->AddRect(CP(tx, y0 + 84), CP(tx + 22, y0 + 106), MmRGBA(255, 210, 110, in), CV(3), 0, CV(1.5f));
     char c[24];
     if (rnd) snprintf(c, sizeof c, "Random"); else snprintf(c, sizeof c, "Colour %d", SuColor() + 1);

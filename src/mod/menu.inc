@@ -248,23 +248,25 @@ static void MmPadButton(ImDrawList* dl, float x, float y, char letter, ImU32 fil
         if (!blocked && io.MouseClicked[0] && m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y) { g_padClick = letter; g_padClickFrame = ImGui::GetFrameCount(); }
     }
     ImVec2 c = CP(x + 18, y + 18);
+    float fa = ((fill >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;   // build 127g: outline + letter fade with the fill
+    ImU32 wh = MmRGBA(255, 255, 255, fa);
     dl->AddCircleFilled(c, CV(18), fill, 32);
-    dl->AddCircle(c, CV(18), IM_COL32_WHITE, 32, CV(2));
+    dl->AddCircle(c, CV(18), wh, 32, CV(2));
     char s[2] = {letter, 0};
-    MmText(dl, g_fUiBold, 24, x + 18, y + 18, IM_COL32_WHITE, s, 1, 1, IM_COL32(0, 0, 0, 200));
+    MmText(dl, g_fUiBold, 24, x + 18, y + 18, wh, s, 1, 1, MmRGBA(0, 0, 0, 0.78f * fa));
 }
 // the game's data box: navy rounded border, a label on the top edge between two lines
-static void MmFieldBox(ImDrawList* dl, float x0, float y0, float x1, float y1, const char* label, ImU32 fill) {
+static void MmFieldBox(ImDrawList* dl, float x0, float y0, float x1, float y1, const char* label, ImU32 fill, float a = 1.0f) {
     dl->AddRectFilled(CP(x0, y0), CP(x1, y1), fill, CV(8));
     const MmPal& P = MmP();
-    dl->AddRect(CP(x0, y0), CP(x1, y1), MmC(P.acc, 0.9f), CV(8), 0, CV(3));
-    dl->AddRect(CP(x0 + 4, y0 + 4), CP(x1 - 4, y1 - 4), MmC(P.gold, 0.45f), CV(6), 0, CV(1));
+    dl->AddRect(CP(x0, y0), CP(x1, y1), MmC(P.acc, 0.9f * a), CV(8), 0, CV(3));
+    dl->AddRect(CP(x0 + 4, y0 + 4), CP(x1 - 4, y1 - 4), MmC(P.gold, 0.45f * a), CV(6), 0, CV(1));
     if (label && *label) {
         float cx = (x0 + x1) * 0.5f;
         float tw = (g_fMenu ? g_fMenu : ImGui::GetFont())->CalcTextSizeA(CV(17 * MmEm(g_fMenu)), FLT_MAX, 0.0f, label).x / g_cv;
-        dl->AddLine(CP(x0 + 18, y0 - 15), CP(cx - tw / 2 - 14, y0 - 15), MmC(P.dim), CV(2));
-        dl->AddLine(CP(cx + tw / 2 + 14, y0 - 15), CP(x1 - 18, y0 - 15), MmC(P.dim), CV(2));
-        MmText(dl, g_fMenu, 17, cx, y0 - 15, MmC(P.text), label, 1, 1, MmC(P.ink));
+        dl->AddLine(CP(x0 + 18, y0 - 15), CP(cx - tw / 2 - 14, y0 - 15), MmC(P.dim, a), CV(2));
+        dl->AddLine(CP(cx + tw / 2 + 14, y0 - 15), CP(x1 - 18, y0 - 15), MmC(P.dim, a), CV(2));
+        MmText(dl, g_fMenu, 17, cx, y0 - 15, MmC(P.text, a), label, 1, 1, MmC(P.ink, a));
     }
 }
 // round icons for the entries the game has no picture for
@@ -579,8 +581,8 @@ static void MmMainFrame() {
         float oy = (1 - in) * 40;
         // build 127f: the room's red + gold box, the sticker picker's ribbon title, more room around Edit setup
         float x0 = 1430, y0 = 535 + oy, x1 = 1870, y1 = 1000 + oy;
-        MmFieldBox(dl, x0, y0, x1, y1, nullptr, MmC(P.panel, 0.92f * in));
-        MmStickerTitle(dl, (x0 + x1) / 2, y0, "MY SETUP");
+        MmFieldBox(dl, x0, y0, x1, y1, nullptr, MmC(P.panel, 0.92f * in), in);
+        MmStickerTitle(dl, (x0 + x1) / 2, y0, "MY SETUP", in);
         SuPanel(dl, x0, y0, x1, in);   // build 102: the saved setup
         MmLine(dl, x0 + 20, y1 - 80, x1 - x0 - 40, 2, MmC(P.acc, 0.7f * in));
         float tw = SuTW(g_fMenu, 15, "Edit setup"), gx = (x0 + x1) / 2 - (36 + 10 + tw) / 2;

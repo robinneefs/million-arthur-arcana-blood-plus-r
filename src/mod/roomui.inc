@@ -200,7 +200,7 @@ static void MmSpinner(ImDrawList* dl, float cx, float cy, float r, float tm, MmR
 }
 // a field box with a title line above it, like the main menu's invite card
 static void MmSection(ImDrawList* dl, float x0, float y0, float x1, float y1, const char* title, float a = 1.0f) {
-    MmFieldBox(dl, x0, y0, x1, y1, title, MmC(MmP().panel, 0.86f * a));
+    MmFieldBox(dl, x0, y0, x1, y1, title, MmC(MmP().panel, 0.86f * a), a);
 }
 
 struct MmSeat { int port; const char* name; const char* pill; };
@@ -536,15 +536,15 @@ static void MmSticker(ImDrawList* dl, int n, float x, float y, float h, ImU32 ti
     MmImg(dl, "MA10_CS_NETWORK", 0, x, y, w, h, tint, ImVec2(c / 5.0f, r / 5.0f), ImVec2((c + 1) / 5.0f, (r + 1) / 5.0f));
 }
 // the title on the picker's top edge: a small crimson plate with gold edges and diamonds
-static void MmStickerTitle(ImDrawList* dl, float cx, float cy, const char* t) {
+static void MmStickerTitle(ImDrawList* dl, float cx, float cy, const char* t, float a = 1.0f) {
     const MmPal& P = MmP();
     float tw = g_fMenu->CalcTextSizeA(CV(18 * MmEm(g_fMenu)), FLT_MAX, 0.0f, t).x / g_cv;
     float hw = tw / 2 + 40, hh = 20;
-    MmImg(dl, "MA10_CMN", 83, cx - hw - 30, cy - hh - 10, 2 * hw + 60, 2 * hh + 20, MmGlowCol(P.glow, 0.35f), ImVec2(0, 0), ImVec2(1, 1), true);
+    MmImg(dl, "MA10_CMN", 83, cx - hw - 30, cy - hh - 10, 2 * hw + 60, 2 * hh + 20, MmGlowCol(P.glow, 0.35f * a), ImVec2(0, 0), ImVec2(1, 1), true);
     // plate: pointed ends like a ribbon
     ImVec2 pts[6] = {CP(cx - hw, cy - hh), CP(cx + hw, cy - hh), CP(cx + hw + 14, cy), CP(cx + hw, cy + hh), CP(cx - hw, cy + hh), CP(cx - hw - 14, cy)};
     {   // build 127c: the gradient fills the whole plate, pointed ends too (two quads with colours per corner)
-        ImU32 top = MmRGBA(150, 22, 18), mid = MmRGBA(90, 12, 10), bot = MmRGBA(52, 6, 6);
+        ImU32 top = MmRGBA(150, 22, 18, a), mid = MmRGBA(90, 12, 10, a), bot = MmRGBA(52, 6, 6, a);
         ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
         const ImVec2* q[2][4] = {{&pts[5], &pts[0], &pts[1], &pts[2]}, {&pts[5], &pts[2], &pts[3], &pts[4]}};
         const ImU32 qc[2][4] = {{mid, top, top, mid}, {mid, mid, bot, bot}};
@@ -556,15 +556,15 @@ static void MmStickerTitle(ImDrawList* dl, float cx, float cy, const char* t) {
             for (int v = 0; v < 4; v++) dl->PrimWriteVtx(*q[k][v], uv, qc[k][v]);
         }
     }
-    dl->AddPolyline(pts, 6, MmC(P.gold, 0.95f), ImDrawFlags_Closed, CV(2));
+    dl->AddPolyline(pts, 6, MmC(P.gold, 0.95f * a), ImDrawFlags_Closed, CV(2));
     ImVec2 in[6] = {CP(cx - hw + 4, cy - hh + 5), CP(cx + hw - 4, cy - hh + 5), CP(cx + hw + 6, cy), CP(cx + hw - 4, cy + hh - 5), CP(cx - hw + 4, cy + hh - 5), CP(cx - hw - 6, cy)};
-    dl->AddPolyline(in, 6, MmC(P.gold, 0.35f), ImDrawFlags_Closed, CV(1));
+    dl->AddPolyline(in, 6, MmC(P.gold, 0.35f * a), ImDrawFlags_Closed, CV(1));
     for (int s = -1; s <= 1; s += 2) {   // a gold diamond each side of the word
         float dx = cx + s * (tw / 2 + 20);
         ImVec2 d[4] = {CP(dx, cy - 6), CP(dx + 6, cy), CP(dx, cy + 6), CP(dx - 6, cy)};
-        dl->AddConvexPolyFilled(d, 4, MmC(P.gold));
+        dl->AddConvexPolyFilled(d, 4, MmC(P.gold, a));
     }
-    MmText(dl, g_fMenu, 18, cx, cy, MmC(P.text), t, 1, 2, MmC(P.ink));
+    MmText(dl, g_fMenu, 18, cx, cy, MmC(P.text, a), t, 1, 2, MmC(P.ink, a));
 }
 static void MmRoomFrame() {
     const MmPal& P = MmP();
