@@ -36,6 +36,12 @@ int SteamFriends(Friend* out, int max);
 const char* SteamFriendName(uint64_t id);
 const char* SteamMyName();            // build 104: own Steam name, "" without Steam
 Transport* MakeSteam(uint64_t peer, char* err, int errLen);
+// Build 129 (security): the game accepts a Steam peer-to-peer session from anyone and reads
+// its own channel 0 with its old online code. With the guard on, only the player our session
+// talks to is accepted, and channel 0 packets are thrown away before the game sees them.
+void SteamGuardOn(bool on);
+bool SteamP2PRequest(uint64_t from);   // the game's "a session is asked for" callback; true = accepted
+void SteamDrainGame();                 // every frame: throw away channel 0 packets
 
 // ---- Build 100: rooms (Steam lobbies) ----
 // All Steam calls run on the game thread in RoomTick(); the overlay only asks

@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 #include "transport.h"
 #include "util.h"
 
@@ -207,6 +208,38 @@ const char* SteamFriendName(uint64_t id) {
     return nm ? nm : "?";
 }
 
+static uint64_t g_allowPeer = 0;   // build 129: the only Steam user a P2P session is accepted from
+static bool g_guard = false;
+void SteamGuardOn(bool on) { g_guard = on; }
+bool SteamP2PRequest(uint64_t from) {
+    typedef bool(TC * Accept_t)(void*, uint64_t);
+    if (!g_guard || (from && from == g_allowPeer)) {
+        char err[96];
+        if (!g_netw && !SteamOpen(err, sizeof err)) return false;
+        Vf<Accept_t>(g_netw, 3)(g_netw, from);
+        return true;
+    }
+    static uint32_t refused = 0;
+    if (refused++ < 10) Log("net: a Steam connection from someone who is not your opponent was refused (%u so far)", refused);
+    return false;
+}
+void SteamDrainGame() {
+    if (!g_guard || !g_netw) return;
+    typedef bool(TC * Avail_t)(void*, uint32_t*, int);
+    typedef bool(TC * Read_t)(void*, void*, uint32_t, uint32_t*, uint64_t*, int);
+    static std::vector<uint8_t> buf;
+    static uint32_t thrown = 0;
+    for (int i = 0; i < 64; i++) {
+        uint32_t size = 0;
+        if (!Vf<Avail_t>(g_netw, 1)(g_netw, &size, 0)) return;
+        if (buf.size() < size + 16) buf.resize(size + 16);
+        uint32_t got = 0;
+        uint64_t from = 0;
+        if (!Vf<Read_t>(g_netw, 2)(g_netw, buf.data(), (uint32_t)buf.size(), &got, &from, 0)) return;
+        if (thrown++ < 5) Log("net: a packet for the game's own online mode (%u bytes) was thrown away", got);
+    }
+}
+
 struct SteamT : Transport {
     uint64_t peer = 0;
     uint32_t lastAccept = 0;
@@ -242,6 +275,7 @@ struct SteamT : Transport {
     ~SteamT() override {
         typedef bool(TC * Close_t)(void*, uint64_t, int);
         if (g_netw) Vf<Close_t>(g_netw, 5)(g_netw, peer, kChannel);
+        if (g_allowPeer == peer) g_allowPeer = 0;
     }
 };
 
@@ -250,6 +284,7 @@ Transport* MakeSteam(uint64_t peer, char* err, int errLen) {
     if (!peer) { snprintf(err, errLen, "no friend picked"); return nullptr; }
     SteamT* t = new SteamT();
     t->peer = peer;
+    g_allowPeer = peer;   // build 129
     t->Tick();
     return t;
 }
@@ -717,6 +752,7 @@ void SetGameHash(uint32_t h) { g_gameHash = h; }
 void RoomTick(int build) {
     if (!g_rlockInit) { InitializeCriticalSection(&g_rlock); g_rlockInit = true; }
     bool ok = RoomsOpen();
+    SteamDrainGame();   // build 129
     RLock l;
     RV.steam = ok;
     RV.me = g_me;

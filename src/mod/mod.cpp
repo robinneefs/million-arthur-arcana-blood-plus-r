@@ -5580,6 +5580,24 @@ static uint32_t __cdecl H_IntroPick(void* p1, void* p2) {
     return reinterpret_cast<IntroPick_t>(addr::FN_INTRO_PICK)(p1, p2);
 }
 
+// Build 129 (security): the game's P2PSessionRequest callback (thiscall, 1 argument: the
+// request, whose first 8 bytes are the asking Steam id) accepted everyone. It now asks
+// net::SteamP2PRequest, which accepts only our session's opponent ([net] steam_guard=0: as before).
+static const uint32_t FN_P2P_REQUEST = 0x0050B180;
+static const uint8_t EXPECT_P2P_REQUEST[] = {0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x18, 0x89, 0x4D, 0xF0};
+static void __attribute__((thiscall)) H_P2PRequest(void*, const uint64_t* req) {
+    if (req) net::SteamP2PRequest(*req);
+}
+static void HookP2PRequest() {
+    wchar_t ini[MAX_PATH];
+    _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
+    if (!GetPrivateProfileIntW(L"net", L"steam_guard", 1, ini)) { Log("net: Steam guard off (steam_guard=0)"); return; }
+    if (!util::BytesMatch(FN_P2P_REQUEST, EXPECT_P2P_REQUEST, sizeof EXPECT_P2P_REQUEST)) { Log("net: Steam guard: unexpected bytes, not installed"); return; }
+    if (!util::WriteRel32(FN_P2P_REQUEST, 0xE9, (void*)H_P2PRequest)) { Log("net: Steam guard: could not install"); return; }
+    net::SteamGuardOn(true);
+    Log("net: Steam guard on: only your opponent can open a Steam connection; packets for the game's own online mode are thrown away");
+}
+
 static bool Install() {
     struct Check { uint32_t at; const uint8_t* bytes; size_t n; const char* what; };
     const Check checks[] = {
@@ -5654,6 +5672,7 @@ static bool Install() {
               util::WriteRel32(addr::CALL_CHILD_UPDATE, 0xE8, (void*)H_ChildUpdate) &&
               HookSaveWrite() && HookTimers();
     if (ok) boot::Install();         // build 61 (optional: the rest works without it)
+    if (ok) HookP2PRequest();        // build 129 (optional)
     Log(ok ? "Hooks installed. Hotkeys: F9 profile, F10 sync test, F11 depth, F8 automatic full test, F7 rollback test with fake lag, F4 connect / disconnect (online), F5 pick a Steam friend." : "Failed to install hooks!");
     SetStatus(ok ? "ready (F9 profile, F10 sync test, F11 depth)" : "hook install failed");
     return ok;
