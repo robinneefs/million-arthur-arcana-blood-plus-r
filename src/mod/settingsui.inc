@@ -5,6 +5,7 @@
 //             button), vibration, and a button check pop-up showing what the game reads
 //   SOUND     the game's music / sound effects / voices volume, our menu sounds and music
 //   DISPLAY   the game's display options (resolution, mode, V-Sync; after a restart)
+//   PERFORMANCE build 124: the Performance check and its results, the fast graphics card choice
 //   ONLINE    the Steam name, connection info in a match (build 122: input delay is in My setup)
 //   LOGS      pack the logs into one zip on the Desktop, open the folder, version
 // The game's settings are reached through gamecfg.inc and written to its save when you leave.
@@ -19,7 +20,8 @@ static const StAction ST_ACT[8] = {{"Weak Attack", gcfg::S_A, "A"},  {"Medium At
                                    {"Burst", gcfg::S_AD, "abcD"},       {"Enchant Boost", gcfg::S_ABC, "ABC"}};
 // build 120: Button check right below the buttons, Vibration below it (up/down reaches both)
 static const int ST_NACT = 8, ST_ROW_CHECK = 8, ST_ROW_VIB = 9;
-static const int ST_ROWS[5] = {10, 5, 3, 1, 2};   // build 122: input delay moved to My setup
+static const int ST_NTABS = 6, ST_TAB_PERF = 3, ST_TAB_ONLINE = 4;   // build 124: PERFORMANCE after DISPLAY
+static const int ST_ROWS[ST_NTABS] = {10, 5, 3, 2, 1, 2};   // build 122: input delay moved to My setup
 
 static struct {
     bool loaded = false, dirty = false;
@@ -27,6 +29,7 @@ static struct {
     int focus = 0;                          // build 104c: 0 the tabs on the left, 1 the tab's panel
     gcfg::State g;
     int delay = 2;
+    bool fastGpu = true;                    // build 124: [display] fast_gpu (the launcher uses it at the next start)
     // remapping
     int listen = -1, listenCol = 0;         // row being set
     double listenUntil = 0;
@@ -42,7 +45,14 @@ static struct {
     int nHist = 0;
     ImVec2 mouse{-1, -1};
 } ST;
-static const char* const ST_TABS[5] = {"CONTROLS", "SOUND", "DISPLAY", "ONLINE", "LOGS"};
+static const char* const ST_TABS[ST_NTABS] = {"CONTROLS", "SOUND", "DISPLAY", "PERFORMANCE", "ONLINE", "LOGS"};
+// build 124: the Performance check (perfcheck.inc, included later)
+namespace pc { struct Result; }
+static bool PcBusy();
+static void PcRequest();
+static const pc::Result& PcResult();
+static bool PcTakeShowResult();
+static void StPerfPanel(ImDrawList* dl, float X0, float Y0, float X1, float Y1, float pulse);
 
 // a small pad / key badge: A B X Y round and coloured, others (LB, RB, LT, RT, keys) as a rounded box
 static float StBadge(ImDrawList* dl, float x, float cy, const char* b, float a = 1.0f) {
@@ -243,6 +253,11 @@ static void StLoad() {
     MmLoadPrefs();
 #ifndef UI_HARNESS
     ST.delay = g_ncfg.delay;
+    {
+        wchar_t ini[MAX_PATH];
+        _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
+        ST.fastGpu = GetPrivateProfileIntW(L"display", L"fast_gpu", 1, ini) != 0;
+    }
 #endif
     ST.loaded = true;
     ST.dirty = false;
@@ -370,7 +385,19 @@ static void StChange(int dx) {
         else if (r == 2) { g.vsync = !g.vsync; gcfg::SetDisplay(g); }
         ST.dirty = true;
         MM_SND |= 1;
-    } else if (ST.tab == 3) {
+    } else if (ST.tab == ST_TAB_PERF) {
+        if (r == 0) { if (dx) return; if (!PcBusy()) { StLeave(); PcRequest(); MM_SND |= 2; } }
+        else {
+            ST.fastGpu = !ST.fastGpu;
+#ifndef UI_HARNESS
+            wchar_t ini[MAX_PATH];
+            _snwprintf(ini, MAX_PATH, L"%lsrollback.ini", util::ModDir());
+            WritePrivateProfileStringW(L"display", L"fast_gpu", ST.fastGpu ? L"1" : L"0", ini);
+            Log("settings: use the fast graphics card %s (from the next start)", ST.fastGpu ? "on" : "off");
+#endif
+            MM_SND |= 2;
+        }
+    } else if (ST.tab == ST_TAB_ONLINE) {
         g_netInfo = !g_netInfo.load(); MmSavePref(L"connection_info", g_netInfo); MM_SND |= 2;
     } else {
         if (dx) return;
@@ -405,7 +432,7 @@ static void MmSettingsFrame() {
         if (ST.focus == 0) {
             // build 104c: the tabs first; A (or right) goes into the tab's panel, B back to the main menu
             if (nav.b) { StLeave(); return; }
-            if (nav.dy) { ST.tab = (ST.tab + nav.dy + 5) % 5; ST.row = 0; ST.col = 0; MM_SND |= 1; }
+            if (nav.dy) { ST.tab = (ST.tab + nav.dy + ST_NTABS) % ST_NTABS; ST.row = 0; ST.col = 0; MM_SND |= 1; }
             if (nav.a || nav.dx > 0) { ST.focus = 1; ST.row = 0; ST.col = 0; MM_SND |= 2; }
             nav = MmNav();
         } else if (nav.b) { ST.focus = 0; MM_SND |= 4; nav = MmNav(); }
@@ -426,7 +453,7 @@ static void MmSettingsFrame() {
     MmText(dl, g_fUi, 22, 1860, 74, MmC(P.dim), "Changes are kept when you leave this screen.", 2);
 
     // ---- tabs ----
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < ST_NTABS; i++) {
         float y = 230 + i * 92;
         if (click && MmHover(40, y - 40, 500, y + 40)) { if (ST.tab != i) { ST.tab = i; ST.row = 0; ST.col = 0; MM_SND |= 1; } ST.focus = 0; click = false; }
         bool on = ST.tab == i;
@@ -553,7 +580,19 @@ static void MmSettingsFrame() {
         MmLine(dl, X0 + 50, Y0 + 390, X1 - X0 - 100, 1, MmC(P.acc, 0.6f));
         MmText(dl, g_fUi, 24, X0 + 50, Y0 + 440, MmC(P.gold), "Resolution and display mode change right away. V-Sync changes the next time you start the game.");
         MmText(dl, g_fUi, 21, X0 + 50, Y0 + 476, MmC(P.faint), "They are the game's own display settings: the game's options menu shows the same.");
-    } else if (ST.tab == 3) {
+    } else if (ST.tab == ST_TAB_PERF) {
+        MmSection(dl, X0, Y0, X1, Y1, "PERFORMANCE");
+        bool busy = PcBusy();
+        if (rowHit(0, X0 + 50, Y0 + 70, X0 + 520, Y0 + 140)) StChange(0);
+        MmButton(dl, X0 + 50, Y0 + 75, X0 + 520, Y0 + 135, busy ? "STARTING..." : "RUN PERFORMANCE CHECK", SR == 0, T.pulse);
+        MmText(dl, g_fUi, 22, X0 + 560, Y0 + 92, MmC(P.text), "About 40 seconds: a fight plays by itself while rollbacks run");
+        MmText(dl, g_fUi, 22, X0 + 560, Y0 + 120, MmC(P.dim), "as on a bad connection. Nothing goes online. Hands off the controller.");
+        if (rowHit(1, X0 + 30, Y0 + 165, X1 - 30, Y0 + 245)) StChange(0);
+        StRow(dl, X0 + 30, X1 - 30, Y0 + 205, "Use the fast graphics card", SR == 1, T.pulse, "For PCs with two graphics chips (laptops). From the next start.");
+        StToggle(dl, X0 + 760, Y0 + 205, ST.fastGpu);
+        MmLine(dl, X0 + 50, Y0 + 265, X1 - X0 - 100, 1, MmC(P.acc, 0.6f));
+        StPerfPanel(dl, X0, Y0 + 270, X1, Y1, T.pulse);
+    } else if (ST.tab == ST_TAB_ONLINE) {
         MmSection(dl, X0, Y0, X1, Y1, "ONLINE");
         StRow(dl, X0 + 30, X1 - 30, Y0 + 110, "Your name", false, T.pulse, "Always your Steam name");
         const char* sn = net::SteamMyName();
@@ -595,8 +634,9 @@ static void MmSettingsFrame() {
     MmLine(dl, -g_cvO.x / g_cv, 960, g_disp.x / g_cv, 3, MmC(P.acc, 0.95f));
     MmLine(dl, -g_cvO.x / g_cv, 964, g_disp.x / g_cv, 1, MmC(P.gold, 0.6f));
     dl->PopClipRect();
-    static const char* help[5] = {"Pick an action and press A, then the button or key you want. One that's taken swaps places.",
+    static const char* help[ST_NTABS] = {"Pick an action and press A, then the button or key you want. One that's taken swaps places.",
                                   "Left / right changes the volume.", "Left / right changes the setting. It is used the next time the game starts.",
+                                  "Checks how steadily this PC runs the game with rollbacks, and what input delay suits it.",
                                   "Shows ping and rollback frames in a corner during a match.", "Pack the logs when you report a problem."};
     const char* h = ST.focus ? help[ST.tab] : "Pick a tab and press A.";
     if (ST.listen >= 0) h = ST.listenCol ? "Press the key you want. Esc keeps the old one." : "Press the button you want. Wait 4 seconds to keep the old one.";

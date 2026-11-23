@@ -411,6 +411,9 @@ static bool g_mmDrew = false;   // build 101: a page was drawn this frame
 static void MmMainFrame();
 static void MmFrame() {
     net::RoomGet(&g_rv);   // build 100: this frame's copy of the Steam room state
+#ifndef UI_HARNESS
+    if (PcTakeShowResult()) { SettingsOpen(); ST.tab = ST_TAB_PERF; ST.focus = 1; ST.row = 0; }   // build 124: Performance check results
+#endif
     // build 101: while you are in a room (or getting into one, e.g. from a Steam invite),
     // the room screen is the only screen; leaving the room brings the main menu back
     bool roomBusy = g_rv.state == net::ROOM_IN || g_rv.state == net::ROOM_CREATING || g_rv.state == net::ROOM_JOINING;

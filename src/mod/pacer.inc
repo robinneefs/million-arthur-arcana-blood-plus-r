@@ -45,6 +45,8 @@ static HANDLE timer = nullptr;
 static bool hiResTimer = false;
 static volatile bool vsync = false;        // from the device (overlay.inc), updated after a display reset
 static uint32_t limiterFlagSeen = 0xFFFFFFFFu;
+static double lastEnd = 0;                 // build 124: when the previous frame's wait ended
+static double lastBusy = 0;                // build 124: how long the last frame worked (game + mod, without our wait)
 
 // statistics: whole run, and the current window (logged with the fight timing every 600 frames)
 struct Win {
@@ -155,6 +157,7 @@ static void WinLog(const Win& w, const char* what) {
 }  // namespace pace
 
 static bool PacerActive() { return pace::active; }
+static double PaceLastBusy() { return pace::active ? pace::lastBusy : -1; }   // build 124 (Performance check)
 // clock sync: make the frame now running longer by ms (no visible pause)
 static void PaceStretch(double ms) {
     if (!pace::active) return;
@@ -179,6 +182,8 @@ static void PaceWindowLog(const char* what) {      // with the fight timing (per
 void PaceEndOfFrame() {
     using namespace pace;
     double now = Now();
+    lastBusy = lastEnd > 0 ? now - lastEnd : 0;
+    struct Ended { ~Ended() { pace::lastEnd = pace::Now(); } } ended;   // build 124: every way out of here
     uint32_t flag = *(const uint32_t*)G_LIMITER_ON;
     if (flag != limiterFlagSeen) { Log("pacer: the game switched its own limiter %s (%u)", flag == 1 ? "on" : "off", flag); limiterFlagSeen = flag; }
     if (next == 0) next = now;                  // first frame: the schedule starts here

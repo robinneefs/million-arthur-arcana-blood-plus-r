@@ -144,6 +144,7 @@ static bool BootInMatch();
 static bool RoomMatchQuietEnd();   // build 112 (roommatch.inc)
 static bool RoomMatchOn();
 static void RoomMatchTick(uint32_t vt);
+static void PcTick(uint32_t vt, bool focused);   // build 124
 namespace snd { static void PlayAlert(); }
 static void DcOnEnd(const char* why) {
     static const struct { const char* s; uint8_t c; } kMap[] = {
@@ -236,6 +237,7 @@ static void UiGameThreadTick(bool focused) {
         if (g_dcSound.exchange(false)) snd::PlayAlert();   // build 108
         net::RoomTick((int)NET_BUILD);   // build 100: Steam rooms (lobbies)
         RoomMatchTick(vt);               // build 112: matches from the room's tables
+        PcTick(vt, focused);             // build 124: Performance check
     }
     // (build 58-100: opened by itself after a press on the "press start" picture; build 101
     // opens our main menu straight away instead, above)
@@ -614,8 +616,20 @@ static void BorderlessTick(bool focused) {
     }
 
 // Build 109: info bar + names over our online fights (drawing thread)
+static int PcSecondsLeft();
 static void HudFrame() {
     if (!U.netOn || U.screenVt != SCENE_BTL) return;
+    if (PcActive()) {                                 // build 124: the Performance check runs
+        const MmPal& P = MmP();
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        char t[96];
+        snprintf(t, sizeof t, "PERFORMANCE CHECK  -  hands off, it plays by itself  -  %d s", PcSecondsLeft());
+        float w = HudTextW(g_fUiBold, 18, t) + 60;
+        dl->AddRectFilled(CP(960 - w / 2, 4), CP(960 + w / 2, 34), MmC(P.bgBot, 0.88f), CV(6));
+        MmLine(dl, 960 - w / 2, 34, w, 1, MmC(P.gold, 0.5f));
+        MmText(dl, g_fUiBold, 18, 960, 19, MmC(P.gold), t, 1);
+        return;
+    }
     char nm[2][32];
     EnterCriticalSection(&g_lobbyLock);
     int my = N.side == 1 ? 1 : 0;
@@ -1021,3 +1035,5 @@ static void UiStart() {
     CreateThread(nullptr, 0, UiHookThread, nullptr, 0, nullptr);
 }
 #endif // UI_HARNESS
+
+#include "perfcheck.inc" // build 124: Performance check (needs the display info above)

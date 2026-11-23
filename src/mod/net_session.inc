@@ -1117,6 +1117,9 @@ static void NetBecomeOn() {
     UiSessionStarted();
     SsStart();
 }
+static bool PcActive();          // build 124 (perfcheck.inc)
+static void PcOverrideNet();
+static uint32_t PcScriptInput();
 static void NetStart() {
     {   // build 111
         static bool awayThread = false;
@@ -1130,6 +1133,7 @@ static void NetStart() {
         g_ncfg.wantSide = g_roomCfg.loop ? 0 : g_roomCfg.side + 1;   // the stand-in is always player 2
         Log("net: room table match: %s, you are player %d", g_roomCfg.loop ? "test player on this PC" : "Steam", g_roomCfg.loop ? 1 : g_roomCfg.side + 1);
     }
+    if (PcActive()) PcOverrideNet();   // build 124: the Performance check's own one-PC session
     N = NetS();
     N.codeHash = g_codeHash;
     LARGE_INTEGER q;
@@ -1763,6 +1767,9 @@ static void NetFill(uint32_t T) {
         g_postNav = raw0;
         uint32_t s = T + InputDelayNow();
         raw0 = z == 2 && s % 16 < 2 ? 0x1000u : 0u;
+        raw1 = 0;
+    } else if (N.sceneVt == SCENE_BTL && PcActive()) {   // build 124: the Performance check plays by itself
+        raw0 = PcScriptInput();
         raw1 = 0;
     }
     if (N.sceneVt == SCENE_BTL && T < 7200 && N.diagN < 150) {
