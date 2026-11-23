@@ -325,8 +325,12 @@ static void StPerfPanel(ImDrawList* dl, float X0, float Y0, float X1, float Y1, 
         int h = r.headroom;
         if (h >= 8) snprintf(t, sizeof t, "Your PC re-runs 8 or more frames within one frame: any input delay works.");
         else snprintf(t, sizeof t, "Your PC can re-run about %d frame%s within one frame.", h, h == 1 ? "" : "s");
-        MmText(dl, g_fUi, 23, rx, ry, MmC(P.text), t);
-        ry += 38;
+        {
+            char wl[3][200];
+            int nl = MmWrap(g_fUi, 23, t, rw, wl, 3);
+            for (int i = 0; i < nl; i++) { MmText(dl, g_fUi, 23, rx, ry, MmC(P.text), wl[i]); ry += 32; }
+            ry += 6;
+        }
         if (h < 8) {
             // rollback frames online ~ one-way trip in frames + 1, minus your input delay
             static const int pings[4] = {50, 100, 150, 200};
