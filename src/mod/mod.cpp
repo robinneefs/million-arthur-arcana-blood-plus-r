@@ -5200,12 +5200,14 @@ static void PollHotkeys() {
 // ---------------------------------------------------------------------------
 static uint32_t g_lastSceneVt = 0;
 
+static void PgInstall();
 static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
     PickFixedStack((uint32_t)__builtin_frame_address(0));
     if (!g_gameTid) {
         g_gameTid = GetCurrentThreadId();
         Log("game thread id %lu", g_gameTid);
         pace::Install();                    // build 123: from the game thread, so it can't be mid-limiter
+        PgInstall();                        // build 123c: move-data pointer guard
     }
     PerfFrameBegin();                       // build 72
     struct PerfEnd { ~PerfEnd() { PerfFrameEnd(); } } perfEnd;
@@ -5280,6 +5282,7 @@ static uint32_t __attribute__((thiscall)) HookUpdateOverlay(void* scene) {
 }
 
 #include "crashdiag.inc"
+#include "ptrguard.inc"          // build 123c
 // ---------------------------------------------------------------------------
 // Crash logging: if the game crashes, note where (helps me fix it).
 // ---------------------------------------------------------------------------
