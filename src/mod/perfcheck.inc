@@ -43,7 +43,7 @@ static double rbMs0 = 0;
 struct Result {
     bool have = false, ok = false;
     char fail[160] = "";
-    double onTimePct = 0, fps = 0, worstMs = 0, perResimMs = 0, baseBusyMs = 0;
+    double onTimePct = 0, score = 0, fps = 0, worstMs = 0, perResimMs = 0, baseBusyMs = 0;
     uint32_t frames = 0, late = 0, hitches = 0, rollbacks = 0, resim = 0, deepest = 0;
     int headroom = -1;                  // frames this PC can re-run inside one frame (-1: not known)
     bool pacerOff = false, timerBad = false, vsyncOdd = false, igpu = false, otherGpu = false, notFront = false;
@@ -124,6 +124,13 @@ static void PcFinish() {
     r.worstMs = worstMs;
     r.fps = secs > 0 ? frames / secs : 0;
     r.onTimePct = frames ? 100.0 * (frames - late) / frames : 0;
+    // build 124c: a PC that runs a little under 60 fps loses frames for good (online, the other
+    // game then waits for it): 1 point off per 0.01 fps below 59.98
+    {
+        double slow = 59.98 - r.fps;
+        r.score = r.onTimePct - (slow > 0 ? slow * 100.0 : 0.0);
+        if (r.score < 0) r.score = 0;
+    }
     r.rollbacks = g_rbRollbacks - rb0;
     r.resim = g_rbResim - resim0;
     r.deepest = g_rbMaxDepth;
@@ -148,9 +155,9 @@ static void PcFinish() {
     snprintf(r.gpu, sizeof r.gpu, "%s", g_gpuName);
     snprintf(r.overlays, sizeof r.overlays, "%s", g_overlays);
     R = r;
-    Log("PERFORMANCE CHECK: %u frames in %.1f s = %.2f fps; %.1f%% on time (%u late), %u hitches over 2 frames (worst %.1f ms); "
+    Log("PERFORMANCE CHECK: score %.1f%%; %u frames in %.1f s = %.2f fps; %.1f%% on time (%u late), %u hitches over 2 frames (worst %.1f ms); "
         "%u rollbacks, %u frames re-run (deepest %u), %.2f ms per re-run frame, frame work without rollbacks %.2f ms -> headroom %d frames",
-        frames, secs, r.fps, r.onTimePct, late, hitches, worstMs, r.rollbacks, r.resim, r.deepest, r.perResimMs, r.baseBusyMs, r.headroom);
+        r.score, frames, secs, r.fps, r.onTimePct, late, hitches, worstMs, r.rollbacks, r.resim, r.deepest, r.perResimMs, r.baseBusyMs, r.headroom);
     Log("  pacer %s, Sleep(1) %.2f ms, monitor %d Hz, v-sync %s, graphics \"%s\"%s%s, overlays: %s, window in the background %u frames",
         r.pacerOff ? "OFF" : "on", r.sleep1, r.hz, pace::vsync ? "on" : "off", r.gpu, r.igpu ? " (built-in)" : "", r.otherGpu ? ", a faster card is there" : "",
         r.overlays[0] ? r.overlays : "none seen", notFront);
@@ -293,14 +300,17 @@ static void StPerfPanel(ImDrawList* dl, float X0, float Y0, float X1, float Y1, 
     }
     // ---- left: the score and the numbers ----
     char t[200];
-    snprintf(t, sizeof t, "%.1f%%", r.onTimePct);
-    MmRgb sc = r.onTimePct >= 98 ? MmRgb{90, 205, 100} : r.onTimePct >= 93 ? MmRgb{240, 190, 60} : MmRgb{225, 55, 40};
+    snprintf(t, sizeof t, "%.1f%%", r.score);
+    MmRgb sc = r.score >= 98 ? MmRgb{90, 205, 100} : r.score >= 93 ? MmRgb{240, 190, 60} : MmRgb{225, 55, 40};
     MmText(dl, g_fUiBold, 64, x, y + 30, MmC(sc), t, 0, 0, 0, 0.5f);
-    MmText(dl, g_fMenu, 14, x, y + 85, MmC(P.faint), "FRAMES ON TIME");
-    const char* verdict = r.onTimePct >= 98 ? "Smooth." : r.onTimePct >= 93 ? "Mostly smooth, with some hitches." : "Not steady: see the hints.";
+    MmText(dl, g_fMenu, 14, x, y + 85, MmC(P.faint), "SCORE: FRAMES ON TIME AT FULL SPEED");
+    bool slowFps = r.fps < 59.98;
+    const char* verdict = r.score >= 98 ? "Smooth." : slowFps && r.onTimePct >= 98 ? "Steady, but a little under 60 fps." : r.score >= 93 ? "Mostly smooth, with some hitches." : "Not steady: see the hints.";
     MmText(dl, g_fUi, 24, x + 260, y + 30, MmC(P.text), verdict);
     float ly = y + 140;
     snprintf(t, sizeof t, "Speed: %.2f frames per second", r.fps);
+    MmText(dl, g_fUi, 23, x, ly, slowFps ? MmC(P.gold) : MmC(P.text), t); ly += 38;
+    snprintf(t, sizeof t, "Frames on time: %.1f%%", r.onTimePct);
     MmText(dl, g_fUi, 23, x, ly, MmC(P.text), t); ly += 38;
     if (r.hitches) snprintf(t, sizeof t, "Hitches: %u (the worst %.0f ms)", r.hitches, r.worstMs);
     else snprintf(t, sizeof t, "Hitches: none (the slowest frame %.0f ms)", r.worstMs);
@@ -351,7 +361,8 @@ static void StPerfPanel(ImDrawList* dl, float X0, float Y0, float X1, float Y1, 
     ry += 38;
     char hints[8][220]; int nh = 0;
     if (r.notFront) snprintf(hints[nh++], 220, "The game window was in the background during the check. Run it again with the game in front.");
-    if (r.pacerOff) snprintf(hints[nh++], 220, "The frame pacer is off (pacer=0 in rollback.ini). Turn it back on for a steadier 60 fps.");
+    if (r.pacerOff) snprintf(hints[nh++], 220, "The frame pacer is off (pacer=0 in rollback.ini). Turn it back on (pacer=1) for a steady 60 fps.");
+    if (slowFps && r.fps > 50) snprintf(hints[nh++], 220, "At %.2f fps this PC falls one frame behind about every %.0f s. Online the other game then has to wait for it.", r.fps, 1.0 / (60.0 - r.fps));
     if (r.timerBad) snprintf(hints[nh++], 220, "Windows' timer is coarse on this PC (a 1 ms sleep takes %.1f ms). Plug a laptop in and use a high performance power plan.", r.sleep1);
     if (r.vsyncOdd) snprintf(hints[nh++], 220, "V-Sync is on and the monitor runs at %d Hz. Turn V-Sync off under DISPLAY, or set the monitor to 60 Hz.", r.hz);
     if (r.igpu && r.otherGpu) snprintf(hints[nh++], 220, "The game runs on the built-in graphics (%s). Turn on \"Use the fast graphics card\" and restart the game.", r.gpu);
