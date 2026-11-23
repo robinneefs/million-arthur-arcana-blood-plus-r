@@ -17,7 +17,7 @@ struct PmView {
     int matchNo;
     float t;                  // seconds since the screen opened
     const char* status;       // instead of the description once both have chosen
-    int setLen;               // build 113: > 0 and this was the last game: only Back to room
+    int setLen;               // build 113: > 0 and the set is over: only Back to room (build 125: first to setLen wins)
 };
 static const float PM_Y = 846, PM_XS[2] = {560, 1010}, PM_WS[2] = {350, 470};   // the two choices (canvas)
 static const char* const PM_ITEMS[2] = {"REMATCH", "BACK TO ROOM"};
@@ -99,11 +99,16 @@ static void PmDraw(const PmView& v) {
     // title: MATCH OVER, the winner under it
     {
         float in = PmEase(t, 0.1f, 0.5f);
-        MmText(dl, g_fMenu, 20, 960, 70 - (1 - in) * 20, MmC(P.dim, in), "MATCH OVER", 1);
+        char top[48];   // build 125: SET OVER, first to N, once someone has won the set
+        if (v.setLen > 0) snprintf(top, sizeof top, "SET OVER  \xC2\xB7  FIRST TO %d", v.setLen);
+        else snprintf(top, sizeof top, "MATCH OVER");
+        MmText(dl, g_fMenu, 20, 960, 70 - (1 - in) * 20, MmC(P.dim, in), top, 1);
         MmLine(dl, 660, 98, 600, 2, MmC(P.acc, 0.9f * in));
         MmLine(dl, 710, 102, 500, 1, MmC(P.gold, 0.6f * in));
         char w[64];
-        if (v.winner < 0) snprintf(w, sizeof w, "DRAW");
+        int sw = v.wins[0] > v.wins[1] ? 0 : 1;   // build 125: set winner
+        if (v.setLen > 0) snprintf(w, sizeof w, "%s WINS %d - %d", v.name[sw], v.wins[sw], v.wins[1 - sw]);
+        else if (v.winner < 0) snprintf(w, sizeof w, "DRAW");
         else snprintf(w, sizeof w, "%s WINS", v.name[v.winner]);
         for (char* p = w; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
         float s = 0.9f + 0.1f * in;
@@ -122,7 +127,7 @@ static void PmDraw(const PmView& v) {
             if (v.setLen > 0 && i == 0) {   // build 113: set over, no Rematch
                 float in = PmEase(t, 0.4f, 0.45f);
                 char s[48];
-                snprintf(s, sizeof s, "SET OVER (%d GAME%s)", v.setLen, v.setLen == 1 ? "" : "S");
+                snprintf(s, sizeof s, "SET OVER");
                 MmText(dl, g_fMenu, 22, XS[0] + WS[0] - 60, Y + 28, MmC(P.faint, in), s, 2);
                 continue;
             }
@@ -148,7 +153,7 @@ static void PmDraw(const PmView& v) {
     MmLine(dl, -g_cvO.x / g_cv, 948, g_disp.x / g_cv, 3, MmC(P.acc, 0.95f));
     MmLine(dl, -g_cvO.x / g_cv, 952, g_disp.x / g_cv, 1, MmC(P.gold, 0.6f));
     dl->PopClipRect();
-    const char* help = v.status ? v.status : v.setLen > 0 ? "That was the last game of this set. Back to the room, then READY for the next set." : PM_HELP[v.sel];
+    const char* help = v.status ? v.status : v.setLen > 0 ? "The set is over. Back to the room, then READY for the next set." : PM_HELP[v.sel];
     MmText(dl, g_fUi, 30, 112, 986, MmC(P.bgBot, 0.6f), help);
     MmText(dl, g_fUi, 30, 110, 984, v.status ? MmC(P.gold) : MmC(P.text), help);
     if (!v.status) {
@@ -195,8 +200,8 @@ static void PmFrame() {
     v.choice[my] = map(me);
     v.choice[1 - my] = LB.haveThem ? map(them) : PM_NONE;
     bool open = me.phase == LP_POST;                  // still choosing (not agreed yet)
-    // build 113: the room's set length: after the last game only Back to room
-    if (g_roomCfg.on && g_roomCfg.setLen > 0 && (int)LB.postMatch >= g_roomCfg.setLen) { v.setLen = g_roomCfg.setLen; PM.sel = 1; }
+    // build 125: first to N wins (was: N games played); draws count for nobody
+    if (g_roomCfg.on && g_roomCfg.setLen > 0 && ImMax(v.wins[0], v.wins[1]) >= g_roomCfg.setLen) { v.setLen = g_roomCfg.setLen; PM.sel = 1; }
     if (!open) v.status = me.phase == LP_MATCH ? "You both picked Rematch. Here we go!" : "Back to the room...";
     // input
     if (open) {

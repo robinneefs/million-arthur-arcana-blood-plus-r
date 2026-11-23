@@ -258,7 +258,7 @@ static void MmRoomSettingsSave() {
 }
 static void MmSetLenText(int n, char* out, int cap) {
     if (n <= 0) snprintf(out, cap, "NO LIMIT");
-    else snprintf(out, cap, "%d GAME%s", n, n == 1 ? "" : "S");
+    else snprintf(out, cap, "FIRST TO %d", n);   // build 125: the set ends when one player has n wins
 }
 // one settings row: label, value; `dir` -1 / +1 changes it. Returns the new value.
 static int MmStep(int v, int dir, int lo, int hi) { v += dir; return v < lo ? hi : v > hi ? lo : v; }
@@ -756,7 +756,7 @@ static void MmRoomFrame() {
             snprintf(score, sizeof score, "%d - %d", sc->wins[0], sc->wins[1]);
             MmText(dl, g_fMenu, 40, cx, y0 + 214, MmC(P.gold, in), score, 1, 2, MmC(P.ink, in));
             char g[32];
-            if (R.set.setLen > 0) snprintf(g, sizeof g, "GAME %d OF %d", sc->game > 0 ? sc->game : 1, R.set.setLen);
+            if (R.set.setLen > 0) snprintf(g, sizeof g, "GAME %d  \xC2\xB7  FIRST TO %d", sc->game > 0 ? sc->game : 1, R.set.setLen);   // build 125
             else snprintf(g, sizeof g, "GAME %d", sc->game > 0 ? sc->game : 1);
             MmText(dl, g_fMenu, 12, cx, y0 + 256, MmC(P.dim, in), g, 1);
             MmText(dl, g_fMenu, 12, cx, y0 + 300, MmC(P.faint, in), "IN MATCH", 1);
