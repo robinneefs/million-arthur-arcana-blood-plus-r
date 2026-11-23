@@ -27,13 +27,14 @@
 #include "imgui.h"
 namespace art {
 
-struct Sprite { int sheet, pal, x, y, w, h; };
+struct Sprite { int sheet, pal, x, y, w, h; };   // sheet = index into the .pil's sheets (build 126: worked out per format)
 struct File {
     char name[48] = "";
     int state = 0;                          // 0 not asked, 1 loading, 2 ready, 3 failed
     char err[160] = "";
     std::vector<std::vector<uint8_t>> pix;  // per sheet: one byte per pixel
     std::vector<int> sw, sh;
+    std::vector<uint8_t> bpp;               // build 126: 1 = colour numbers (format 0x29), 4 = B,G,R,A (format 0x15)
     std::vector<uint8_t> pals;              // 1024 bytes per colour table
     std::vector<Sprite> spr;
     uint32_t lastUse = 0;
@@ -114,28 +115,37 @@ static void LoadFile(File* f) {
         return;
     }
     std::vector<uint8_t> pals(itd.begin() + 0x3C, itd.begin() + 0x3C + npal * 1024);
+    // Build 126: a sprite names its sheet as (format, n): the n-th sheet of that format in the .pil
+    // (e.g. MA10_KCSTMZ: the knights' card pictures are on its two B,G,R,A sheets, format 0x15).
+    std::vector<uint32_t> sfmt(nsheet, 0);
+    for (uint32_t s = 0; s < nsheet; s++) Rd(pil, 0x10 + s * 0x24 + 0x14, sfmt[s]);
     std::vector<Sprite> spr;
     for (uint32_t i = 0; i < nspr; i++) {
         int32_t v[7];
         memcpy(v, itd.data() + sprOff + 8 + i * 44, sizeof v);
-        spr.push_back(Sprite{v[1], v[2], v[3], v[4], v[5], v[6]});
+        int sheet = -1;
+        for (uint32_t s = 0, n = 0; s < nsheet; s++)
+            if (sfmt[s] == (uint32_t)v[0]) { if ((int32_t)n == v[1]) { sheet = (int)s; break; } n++; }
+        spr.push_back(Sprite{sheet, v[2], v[3], v[4], v[5], v[6]});
     }
     std::vector<std::vector<uint8_t>> pix(nsheet);
     std::vector<int> sw(nsheet), sh(nsheet);
+    std::vector<uint8_t> bpp(nsheet, 1);
     for (uint32_t s = 0; s < nsheet; s++) {
         size_t e = 0x10 + s * 0x24;
         uint16_t w = 0, h = 0;
         uint32_t fmt = 0, off = 0, sz = 0;
         if (!Rd(pil, e + 4, w) || !Rd(pil, e + 6, h) || !Rd(pil, e + 0x14, fmt) || !Rd(pil, e + 0x1C, off) || !Rd(pil, e + 0x20, sz) ||
-            (size_t)off + sz > pil.size() || fmt != 0x29 || !w || !h) {
+            (size_t)off + sz > pil.size() || (fmt != 0x29 && fmt != 0x15) || !w || !h) {
             snprintf(f->err, sizeof f->err, "%s: sheet %u has an unknown kind (format %X)", f->name, s, fmt);
             continue;                       // sprites on it simply stay empty
         }
-        if (!Unpack(pil.data() + off, sz, pix[s], (size_t)w * h)) { snprintf(f->err, sizeof f->err, "%s: sheet %u did not unpack", f->name, s); pix[s].clear(); continue; }
+        bpp[s] = fmt == 0x15 ? 4 : 1;
+        if (!Unpack(pil.data() + off, sz, pix[s], (size_t)w * h * bpp[s])) { snprintf(f->err, sizeof f->err, "%s: sheet %u did not unpack", f->name, s); pix[s].clear(); continue; }
         sw[s] = w; sh[s] = h;
     }
     EnterCriticalSection(&g_lock);
-    f->pals.swap(pals); f->spr.swap(spr); f->pix.swap(pix); f->sw.swap(sw); f->sh.swap(sh);
+    f->pals.swap(pals); f->spr.swap(spr); f->pix.swap(pix); f->sw.swap(sw); f->sh.swap(sh); f->bpp.swap(bpp);
     f->state = 2;
     LeaveCriticalSection(&g_lock);
     Log("art: %s loaded (%u sheets, %u sprites, %u colour tables)%s%s", f->name, nsheet, nspr, npal, f->err[0] ? ", note: " : "", f->err);
@@ -338,7 +348,8 @@ static void* Get(const char* name, int sprite, ImVec2* size = nullptr) {
     if (ok) {
         s = f->spr[sprite];
         ok = s.sheet >= 0 && s.sheet < (int)f->pix.size() && !f->pix[s.sheet].empty() && s.w > 0 && s.h > 0 && s.w <= 4096 && s.h <= 4096 &&
-             s.x >= 0 && s.y >= 0 && s.x + s.w <= f->sw[s.sheet] && s.y + s.h <= f->sh[s.sheet] && s.pal >= 0 && (size_t)(s.pal + 1) * 1024 <= f->pals.size();
+             s.x >= 0 && s.y >= 0 && s.x + s.w <= f->sw[s.sheet] && s.y + s.h <= f->sh[s.sheet] &&
+             (f->bpp[s.sheet] == 4 || (s.pal >= 0 && (size_t)(s.pal + 1) * 1024 <= f->pals.size()));
     }
     if (!ok) { LeaveCriticalSection(&g_lock); return nullptr; }
     // make room
@@ -350,11 +361,16 @@ static void* Get(const char* name, int sprite, ImVec2* size = nullptr) {
         DropTex(old);
     }
     std::vector<uint32_t> px((size_t)s.w * s.h);
-    const uint32_t* pal = reinterpret_cast<const uint32_t*>(f->pals.data() + s.pal * 1024);   // B,G,R,A = A8R8G8B8
     const uint8_t* src = f->pix[s.sheet].data();
     int sw = f->sw[s.sheet];
-    for (int y = 0; y < s.h; y++)
-        for (int x = 0; x < s.w; x++) px[(size_t)y * s.w + x] = pal[src[(size_t)(s.y + y) * sw + s.x + x]];
+    if (f->bpp[s.sheet] == 4) {   // build 126: B,G,R,A pixels as they are
+        const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
+        for (int y = 0; y < s.h; y++) memcpy(&px[(size_t)y * s.w], s32 + (size_t)(s.y + y) * sw + s.x, (size_t)s.w * 4);
+    } else {
+        const uint32_t* pal = reinterpret_cast<const uint32_t*>(f->pals.data() + s.pal * 1024);   // B,G,R,A = A8R8G8B8
+        for (int y = 0; y < s.h; y++)
+            for (int x = 0; x < s.w; x++) px[(size_t)y * s.w + x] = pal[src[(size_t)(s.y + y) * sw + s.x + x]];
+    }
     LeaveCriticalSection(&g_lock);
     Tex t;
     t.tex = MakeTex(px.data(), s.w, s.h);

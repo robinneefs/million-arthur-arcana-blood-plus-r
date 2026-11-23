@@ -13,7 +13,7 @@
 static const char* const MM_TIMER_NAMES[4] = {"30", "60", "99", "NO LIMIT"};
 
 // ---- input for the room screens: keyboard, controllers (with repeat), not while typing ----
-struct MmNav { int dy = 0, dx = 0; bool a = false, b = false, x = false, y = false, lb = false, rb = false; };   // build 102: + LB / RB (Page Up / Page Down)
+struct MmNav { int dy = 0, dx = 0; bool a = false, b = false, x = false, y = false, lb = false, rb = false, start = false, back = false; };   // build 126: + Start / Back (View)   // build 102: + LB / RB (Page Up / Page Down)
 static MmNav MmReadNav(bool typing) {
     MmNav n;
     ImGuiIO& io = ImGui::GetIO();
@@ -32,10 +32,12 @@ static MmNav MmReadNav(bool typing) {
         if (ImGui::IsKeyPressed('Y')) n.y = true;
         if (ImGui::IsKeyPressed(0x21)) n.lb = true;   // Page Up
         if (ImGui::IsKeyPressed(0x22)) n.rb = true;   // Page Down
+        if (ImGui::IsKeyPressed(0x2E)) n.back = true; // build 126: Delete key = the pad's Back / View button
         // build 117: clicking a button prompt = that button; right click = B (not in a room:
         // there right click changes a room setting, and B would stand you up)
         char pc = MmTakePadClick();
         if (pc == 'A') n.a = true; else if (pc == 'B') n.b = true; else if (pc == 'X') n.x = true; else if (pc == 'Y') n.y = true;
+        else if (pc == 'S') n.start = true; else if (pc == 'V') n.back = true;   // build 126
         if (io.MouseClicked[1] && MM.screen != 1) n.b = true;
     }
 #ifndef UI_HARNESS
@@ -58,6 +60,8 @@ static MmNav MmReadNav(bool typing) {
     if (fresh & PB_Y) n.y = true;
     if (fresh & PB_LB) n.lb = true;
     if (fresh & PB_RB) n.rb = true;
+    if (fresh & PB_START) n.start = true;   // build 126
+    if (fresh & PB_BACK) n.back = true;
     MM.prevNav = nb;
 #else
     (void)now;

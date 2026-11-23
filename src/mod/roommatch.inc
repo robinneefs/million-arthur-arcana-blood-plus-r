@@ -70,7 +70,7 @@ static void RoomMatchTick(uint32_t vt) {
     if (inRoom) {
         if (!SU.loaded) SuLoad();
         char v[64];
-        snprintf(v, sizeof v, "%d,%d,%d,%d,%d,%d", SU.chara, SU.color, SU.stage, SU.p[SU.inUse].a[0], SU.p[SU.inUse].a[1], SU.p[SU.inUse].a[2]);
+        snprintf(v, sizeof v, "%d,%d,%d,%d,%d,%d", SU.chara, SuColor(), SU.stage, SuInUse().a[0], SuInUse().a[1], SuInUse().a[2]);
         RmPublish("su", RM.su, sizeof RM.su, v);
     } else RM.su[0] = RM.sc[0] = RM.play[0] = 0;   // a new room gets everything again
 
