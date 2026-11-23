@@ -292,9 +292,9 @@ static void SuBigCard(ImDrawList* dl, float x, float y, float sc, int a, ImU32 t
     MmImg(dl, "MA10_KCSTMZ", 19, X(12), Y(9), 72 * sc, 73 * sc, tint, ImVec2(ex, ey), ImVec2(ex + 0.5f, ey + 0.5f));
     MmImg(dl, "MA10_KCSTMZ", 30, X(14), Y(92), 57 * sc, 58 * sc, tint, ImVec2((cost - 1) / 3.0f, 0), ImVec2(cost / 3.0f, 1));
     // the name strip: a dark bar with the game's own lettering of the name (one 24 px row per Knight)
-    dl->AddRectFilledMultiColor(CP(X(92), Y(28)), CP(X(348), Y(54)), MmRGBA(48, 30, 16, 0.55f), MmRGBA(48, 30, 16, 0.94f),
+    dl->AddRectFilledMultiColor(CP(X(88), Y(28)), CP(X(342), Y(54)), MmRGBA(48, 30, 16, 0.55f), MmRGBA(48, 30, 16, 0.94f),
                                 MmRGBA(48, 30, 16, 0.94f), MmRGBA(48, 30, 16, 0.55f));
-    MmImg(dl, "MA10_KCSTMZ", 1, X(95), Y(29), 254 * sc, 24 * sc, tint, ImVec2(0, a * 24 / 768.0f), ImVec2(1, (a + 1) * 24 / 768.0f));
+    MmImg(dl, "MA10_KCSTMZ", 1, X(88), Y(29), 254 * sc, 24 * sc, tint, ImVec2(0, a * 24 / 768.0f), ImVec2(1, (a + 1) * 24 / 768.0f));
     MmImg(dl, "MA10_KCSTMZ", 18, X(28), Y(360), 300 * sc, 42 * sc, tint, ImVec2(0, ty / 3.0f), ImVec2(1, (ty + 1) / 3.0f));
     const int lab[3] = {77, 79, 78};                       // ATTACK, SPEED, RANGE
     const float labW[3] = {86, 73, 77};
