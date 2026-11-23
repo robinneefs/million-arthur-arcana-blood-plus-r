@@ -577,14 +577,15 @@ static void MmMainFrame() {
     {
         float in = ease(0.5f, 0.5f);
         float oy = (1 - in) * 40;
-        float x0 = 1430, y0 = 672 + oy, x1 = 1870, y1 = 1000 + oy;
-        dl->AddRectFilled(CP(x0 + 6, y0 + 6), CP(x1 - 6, y1 - 6), MmC(P.panel, 0.9f * in), CV(12));
-        MmNine(dl, "MA10_CS_NETWORK", 45, 26, 26, x0, y0, x1, y1, MmRGBA(255, 255, 255, in));
-        MmText(dl, g_fMenu, 19, x0 + 26, y0 + 34, MmC(P.text, in), "MY SETUP", 0, 1, MmC(P.ink, in));
-        SuPanel(dl, x0, y0, in);   // build 102: the saved setup
-        MmLine(dl, x0 + 24, y1 - 62, x1 - x0 - 48, 2, MmC(P.acc, 0.6f * in));
-        MmPadButton(dl, x0 + 24, y1 - 49, 'Y', MmRGBA(210, 170, 20, in));
-        MmText(dl, g_fMenu, 15, x0 + 70, y1 - 31, MmC(P.text, in), "Edit setup");
+        // build 127f: the room's red + gold box, the sticker picker's ribbon title, more room around Edit setup
+        float x0 = 1430, y0 = 535 + oy, x1 = 1870, y1 = 1000 + oy;
+        MmFieldBox(dl, x0, y0, x1, y1, nullptr, MmC(P.panel, 0.92f * in));
+        MmStickerTitle(dl, (x0 + x1) / 2, y0, "MY SETUP");
+        SuPanel(dl, x0, y0, x1, in);   // build 102: the saved setup
+        MmLine(dl, x0 + 20, y1 - 80, x1 - x0 - 40, 2, MmC(P.acc, 0.7f * in));
+        float tw = SuTW(g_fMenu, 15, "Edit setup"), gx = (x0 + x1) / 2 - (36 + 10 + tw) / 2;
+        MmPadButton(dl, gx, y1 - 58, 'Y', MmRGBA(210, 170, 20, in));
+        MmText(dl, g_fMenu, 15, gx + 46, y1 - 40, MmC(P.text, in), "Edit setup");
         if (MM.screen == 0 && ImGui::GetIO().MouseClicked[0] && ImGui::IsMouseHoveringRect(CP(x0, y0), CP(x1, y1), false)) { MM_SND |= 2; SuOpen(); }
     }
 

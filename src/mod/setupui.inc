@@ -994,28 +994,56 @@ static void MmSetupFrame() {
 }
 
 // ---- the My setup panel on the main menu ----
-static void SuPanel(ImDrawList* dl, float x0, float y0, float in) {
+// build 127f: the main menu's My setup card, in the room panel's style (mock ux/main-setup): rows CHARACTER,
+// STAGE | DELAY, SUPPORT KNIGHTS with left-aligned titles and gold lines between; x0..x1 is the card.
+static void SuPanel(ImDrawList* dl, float x0, float y0, float x1, float in) {
     const MmPal& P = MmP();
     SuLoad();
     bool rnd = SU.chara == SU_RANDOM;
-    MmImg(dl, "MA10_CSEL", rnd ? 48 : SU_PORTRAIT[SU.chara], x0 + 24, y0 + 62, 110, 161, MmRGBA(255, 255, 255, in));
-    float x = x0 + 150, y = y0 + 72;
+    ImU32 frameCol = MmRGBA(214, 170, 82, in), white = MmRGBA(255, 255, 255, in), lineCol = MmRGBA(150, 110, 60, 0.8f * in);
+    const float L = x0 + 26;
+    auto label = [&](float x, float y, const char* t) { MmText(dl, g_fMenu, 11, x, y, MmC(P.faint, in), t); };
+    // character
+    label(L, y0 + 42, "CHARACTER");
+    {
+        int spr = rnd ? 48 : SU_PORTRAIT[SU.chara];
+        ImVec2 ts(1, 1);
+        art::Get("MA10_CSEL", spr, &ts);
+        float v0 = 0.05f, v1 = v0 + (ts.y > 0 ? ts.x / ts.y : 0.68f);
+        MmImg(dl, "MA10_CSEL", spr, L, y0 + 58, 64, 64, white, ImVec2(0, v0), ImVec2(1, v1 > 1 ? 1 : v1));
+        dl->AddRect(CP(L, y0 + 58), CP(L + 64, y0 + 122), frameCol, 0, 0, CV(1));
+    }
+    float tx = L + 80, tw = x1 - 24 - tx;
     const char* nm = rnd ? "Random" : SU_CHARS[SU.chara];
-    MmText(dl, g_fUiBold, strlen(nm) > 18 ? 21.0f : 27.0f, x, y, MmC(P.text, in), nm);
-    dl->AddRectFilled(CP(x, y + 20), CP(x + 26, y + 46), MmC(P.bgTop, in), CV(4));
-    if (!rnd) SuHead(dl, SU.chara, SuColor(), x, y + 20, 26, 26);
-    dl->AddRect(CP(x, y + 20), CP(x + 26, y + 46), MmRGBA(255, 210, 110, in), CV(4), 0, CV(2));
+    float px = 27;
+    while (px > 16 && SuTW(g_fUiBold, px, nm) > tw) px -= 1;
+    MmText(dl, g_fUiBold, px, tx, y0 + 78, MmC(P.text, in), nm);
+    dl->AddRectFilled(CP(tx, y0 + 96), CP(tx + 24, y0 + 120), MmC(P.bgTop, in), CV(3));
+    if (!rnd) SuHead(dl, SU.chara, SuColor(), tx, y0 + 96, 24, 24);
+    dl->AddRect(CP(tx, y0 + 96), CP(tx + 24, y0 + 120), MmRGBA(255, 210, 110, in), CV(3), 0, CV(1.5f));
     char c[24];
     if (rnd) snprintf(c, sizeof c, "Random colour"); else snprintf(c, sizeof c, "Colour %d", SuColor() + 1);
-    MmText(dl, g_fUi, 21, x + 36, y + 33, MmC(P.dim, in), c);
-    MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, x, y + 58, 74, 47, MmRGBA(255, 255, 255, in));
-    dl->AddRect(CP(x, y + 58), CP(x + 74, y + 105), MmRGBA(214, 170, 82, in), 0, 0, CV(1));
+    MmText(dl, g_fUi, 21, tx + 32, y0 + 108, MmC(P.dim, in), c);
+    dl->AddLine(CP(x0 + 20, y0 + 140), CP(x1 - 20, y0 + 140), lineCol, CV(1));
+    // stage | delay
+    float vx = x0 + 300;
+    dl->AddLine(CP(vx, y0 + 152), CP(vx, y0 + 234), lineCol, CV(1));
+    label(L, y0 + 164, "STAGE");
+    MmImg(dl, "MA10_CSEL", SU.stage == SU_RANDOM ? 14 : 6 + SU.stage, L, y0 + 180, 80, 51, white);
+    dl->AddRect(CP(L, y0 + 180), CP(L + 80, y0 + 231), frameCol, 0, 0, CV(1));
     char s[24];
-    if (SU.stage == SU_RANDOM) snprintf(s, sizeof s, "Random stage"); else snprintf(s, sizeof s, "Stage %02d", SU.stage + 1);
-    MmText(dl, g_fUi, 21, x + 84, y + 81, MmC(P.dim, in), s);
-    MmText(dl, g_fMenu, 11, x, y + 124, MmC(P.faint, in), "KNIGHTS");
-    MmText(dl, g_fUiBold, 21, x + 90, y + 124, MmC(P.text, in), SuInUse().name);
-    for (int k = 0; k < 3; k++) SuSmallCard(dl, x + k * 91, y + 141, 86.0f / 192, SuInUse().a[k], false, in);
+    if (SU.stage == SU_RANDOM) snprintf(s, sizeof s, "Random"); else snprintf(s, sizeof s, "Stage %02d", SU.stage + 1);
+    MmText(dl, g_fUiBold, 25, L + 94, y0 + 196, MmC(P.text, in), s);
+    MmText(dl, g_fUi, 20, L + 94, y0 + 222, MmC(P.dim, in), "Your pick");
+    label(vx + 20, y0 + 164, "DELAY");
+    char dn[8]; snprintf(dn, sizeof dn, "%d", g_ncfg.delay);
+    MmText(dl, g_fMenu, 26, vx + 20, y0 + 197, MmC(P.gold, in), dn, 0, 2, MmC(P.ink, in));
+    MmText(dl, g_fUi, 20, vx + 20, y0 + 225, MmC(P.dim, in), g_ncfg.delay == 1 ? "frame" : "frames");
+    dl->AddLine(CP(x0 + 20, y0 + 246), CP(x1 - 20, y0 + 246), lineCol, CV(1));
+    // support knights
+    label(L, y0 + 268, "SUPPORT KNIGHTS");
+    MmText(dl, g_fUiBold, 25, L, y0 + 296, MmC(P.text, in), SuInUse().name);
+    for (int k = 0; k < 3; k++) SuSmallCard(dl, L + k * 132, y0 + 316, 122.0f / 192, SuInUse().a[k], false, in);
 }
 // build 112: My setup as one row (the room's MY MATCH SETTINGS bar)
 static int SuPortraitOf(int chara) { return chara >= 0 && chara < SU_NCHAR ? SU_PORTRAIT[chara] : 48; }
