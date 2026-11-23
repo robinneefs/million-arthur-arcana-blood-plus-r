@@ -137,9 +137,46 @@ static void MoveFrom119(const std::wstring& gameDir, const std::wstring& ourDir)
     Say(L"Removed the old ArcanaPlusR folder from the game folder.");
 }
 
+// Build 123 (issue #5): on laptops with two graphics chips, Windows or the driver often runs the
+// game on the weak built-in one (the game never asks for the fast card). Set Windows' own per-app
+// graphics choice for the game's exe to "High performance" (Settings > System > Display >
+// Graphics; per user, nothing in the game folder). A choice the player made themselves is left
+// alone; ours is removed again when [display] fast_gpu=0.
+static void PreferFastGpu(const std::wstring& exe, const std::wstring& ourDir) {
+    std::wstring ini = ourDir + L"rollback.ini";
+    bool on = GetPrivateProfileIntW(L"display", L"fast_gpu", 1, ini.c_str()) != 0;
+    bool ours = GetPrivateProfileIntW(L"display", L"fast_gpu_set_by_us", 0, ini.c_str()) != 0;
+    static const wchar_t* kKey = L"Software\\Microsoft\\DirectX\\UserGpuPreferences";
+    static const wchar_t* kHigh = L"GpuPreference=2;";
+    HKEY k = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kKey, 0, nullptr, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &k, nullptr) != ERROR_SUCCESS) {
+        Say(L"Graphics card choice: could not open the Windows setting.");
+        return;
+    }
+    wchar_t cur[128] = L"";
+    DWORD type = 0, len = sizeof cur - sizeof(wchar_t);
+    bool has = RegQueryValueExW(k, exe.c_str(), nullptr, &type, (BYTE*)cur, &len) == ERROR_SUCCESS && type == REG_SZ;
+    if (on) {
+        if (!has) {
+            if (RegSetValueExW(k, exe.c_str(), 0, REG_SZ, (const BYTE*)kHigh, (DWORD)((wcslen(kHigh) + 1) * sizeof(wchar_t))) == ERROR_SUCCESS) {
+                WritePrivateProfileStringW(L"display", L"fast_gpu_set_by_us", L"1", ini.c_str());
+                Say(L"Graphics card: Windows now runs the game on the fast graphics card (High performance).");
+            }
+        } else if (!wcsstr(cur, L"GpuPreference=2;") && !ours) {
+            Say(L"Graphics card: you chose \"%ls\" for the game in Windows' graphics settings; left as it is.", cur);
+        }
+    } else if (ours && has && !wcscmp(cur, kHigh)) {
+        RegDeleteValueW(k, exe.c_str());
+        WritePrivateProfileStringW(L"display", L"fast_gpu_set_by_us", nullptr, ini.c_str());
+        Say(L"Graphics card: Windows' choice for the game removed again (fast_gpu=0).");
+    }
+    RegCloseKey(k);
+}
+
 // start the game with the mod; false + why when it could not start
 static bool Start(const std::wstring& gameDir, const std::wstring& ourDir, std::string& why) {
     std::wstring exe = gameDir + L"\\" + kExeName;
+    PreferFastGpu(exe, ourDir);       // build 123
     // Tell the Steam layer which game this is, so it runs without being relaunched by Steam
     // (Steam itself must be running), and tell our dinput8.dll where the mod is.
     SetEnvironmentVariableW(L"SteamAppId", kAppId);

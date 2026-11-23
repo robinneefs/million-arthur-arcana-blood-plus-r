@@ -4000,6 +4000,7 @@ static void LogTimings(const char* when) {
         g_tReplay.max, g_tUpdate.n ? g_tUpdate.sum / g_tUpdate.n : 0.0, g_tSave.n);
 }
 
+#include "pacer.inc"           // build 123
 #include "perf.inc"
 static void RbResetStats();
 static void RbLogStats(const char* when);
@@ -5184,6 +5185,7 @@ static uint32_t __attribute__((thiscall)) HookUpdateMain(void* scene) {
     if (!g_gameTid) {
         g_gameTid = GetCurrentThreadId();
         Log("game thread id %lu", g_gameTid);
+        pace::Install();                    // build 123: from the game thread, so it can't be mid-limiter
     }
     PerfFrameBegin();                       // build 72
     struct PerfEnd { ~PerfEnd() { PerfFrameEnd(); } } perfEnd;

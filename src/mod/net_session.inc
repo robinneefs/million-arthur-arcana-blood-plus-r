@@ -129,6 +129,8 @@ static struct NetS {
     // timing
     uint32_t lastRecv = 0, lastPing = 0, lastHello = 0, rtt = 0, startMs = 0;
     uint32_t lastAdjust = 0;
+    bool stretching = false;            // build 123: clock sync is lengthening frames now
+    uint32_t stretchFrames = 0;         // build 123: frames lengthened (whole session)
     int aheadF = 0;
     int aheadQ = 0;                     // build 57: smoothed frames ahead of the other game x4 (this PC's view)
     int rAheadQ = 0;                    // ... the other game's own view of the same
@@ -1063,6 +1065,7 @@ static void NetResetScreen() {
     N.autoDone = false;
     N.aheadF = N.aheadQ = N.rAheadQ = N.syncQ = 0;
     N.lastAdjust = 0;
+    N.stretching = false;
     N.diagN = 0;
     N.diagRaw0 = N.diagRaw1 = N.diagHeld0 = N.diagHeld1 = 0xFFFFFFFFu;
     N.diagFg = -1;
@@ -1644,8 +1647,9 @@ static NetAct NetBeforeInput() {
             char rd[16];
             if (N.rDelay <= 8) snprintf(rd, sizeof rd, "%u", N.rDelay); else snprintf(rd, sizeof rd, "not known yet");
             Log("net: fight screen %u: input delay yours %u, theirs %s; this PC aims to run %+d frames ahead%s",
-                N.epoch, N.myDelay, rd, ClockTargetQ() / 4, behind > 0 ? "; waiting for the difference once now" : "");
-            if (behind > 0) { PerfScope ps(perf::P_WAIT); Sleep((DWORD)(behind * 50 / 3)); }
+                N.epoch, N.myDelay, rd, ClockTargetQ() / 4, behind > 0 ? "; waits for the difference once when rollback starts" : "");
+            // build 123: the wait itself moved to NetRbStarting. In an in-place rematch the fight
+            // first runs in step (the YES box) until rollback starts, which undid a wait made here.
         }
         return NetAct::Inject;                         // frame 1: no input on both PCs
     }
@@ -1688,6 +1692,26 @@ static NetAct NetBeforeInput() {
         // frames is left alone; 1.5-2 frames: one wait at most every 30 frames;
         // 2 frames or more (after a hiccup): a wait every 2 frames until it is back.
         int gapQ = N.syncQ;
+        // Build 123 (fixes 2 and 3): with our frame pacer, the PC that runs ahead makes its frames
+        // a little longer instead of pausing a whole frame (0.25 ms per quarter frame of gap, at most
+        // 1.5 ms = 9%: nobody sees it). Starts at half a frame of gap (was 1.5 frames: at equal delays
+        // one PC sat a frame ahead and took all rollbacks), stops when the gap is gone. A whole-frame
+        // wait is left only for gaps of 4 frames or more (after a freeze).
+        if (PacerActive() && g_ncfg.clockSync && !N.loop) {
+            if (gapQ >= 2) N.stretching = true;
+            else if (gapQ <= 0) N.stretching = false;
+            if (gapQ >= 16 && g_frame - N.lastAdjust >= 2) {
+                N.lastAdjust = g_frame;
+                N.timeStalls++;
+                N.lastStallFrame = T;
+                PaceAddDelay(1000.0 / 60.0, true);
+            } else if (N.stretching) {
+                double ms = gapQ * 0.25;
+                PaceStretch(ms < 0.25 ? 0.25 : ms > 1.5 ? 1.5 : ms);
+                N.stretchFrames++;
+            }
+            return NetAct::Inject;
+        }
         uint32_t every = gapQ >= 8 ? 2 : gapQ >= 6 ? 30 : 0xFFFFFFFFu;
         if (g_ncfg.clockSync && !N.loop && every != 0xFFFFFFFFu && g_frame - N.lastAdjust >= every) {
             N.lastAdjust = g_frame;
@@ -1825,6 +1849,18 @@ static void NetFeedRb() {
     }
 }
 static void NetRbStarting(uint32_t F) {
+    // Build 123 (fix 3, friend test 22 Nov: 8-10 input waits + 13-36 one-frame clock waits in the
+    // first 300 frames of every in-place rematch): the frames before rollback starts run in step,
+    // so both games are at the same frame here. The PC with the higher delay now waits for the
+    // delay difference once (it should run behind by that much), in every fight and rematch.
+    if (N.sceneVt == SCENE_BTL && N.rDelay <= 8) {
+        int behind = (int)N.myDelay - (int)N.rDelay;
+        if (behind > 0) {
+            Log("net: rollback starts at fight frame %u: this PC waits %d frame%s once (delays %u / %u)", F, behind, behind == 1 ? "" : "s", N.myDelay, N.rDelay);
+            if (PacerActive()) PaceAddDelay(behind * 1000.0 / 60.0, false);
+            else { PerfScope ps(perf::P_WAIT); Sleep((DWORD)(behind * 50 / 3)); }
+        }
+    }
     const NetIn& x = N.rIn[(F - 1) % 256];
     if (x.frame == F - 1) { g_rbLast[0] = x.v[0]; g_rbLast[1] = x.v[1]; }
     for (uint32_t f = 1; f < F && f + 250 > F; f++) {     // frames before the start are all real
@@ -1844,8 +1880,8 @@ static void NetFrameEnd(void* scene) {
         Log("net: fight frame 300: %u one-frame waits so far in this fight; aim %+d frames ahead, now %+.2f from the aim (both views together)",
             N.timeStalls - N.timeStallsAtStart, ClockTargetQ() / 4, N.syncQ / 4.0);
     if (NetRbMode() && g_frame % 600 == 0) {
-        Log("net: clock sync at frame %u: this PC %+.2f frames ahead, the other PC says %+.2f, together %+.2f; %u one-frame waits so far; rollbacks %u (deepest %u)",
-            g_frame, N.aheadQ / 4.0, N.rAheadQ / 4.0, N.syncQ / 4.0, N.timeStalls, g_rbRollbacks, g_rbMaxDepth);
+        Log("net: clock sync at frame %u: this PC %+.2f frames ahead, the other PC says %+.2f, together %+.2f; %u one-frame waits, %u stretched frames so far; rollbacks %u (deepest %u)",
+            g_frame, N.aheadQ / 4.0, N.rAheadQ / 4.0, N.syncQ / 4.0, N.timeStalls, N.stretchFrames, g_rbRollbacks, g_rbMaxDepth);
         DlWindowLog();                  // build 121
     }
     // Build 41: the check before rollback found a difference. A replay that

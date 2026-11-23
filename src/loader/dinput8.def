@@ -6,3 +6,5 @@ EXPORTS
     DllRegisterServer = P_DllRegisterServer@0 PRIVATE
     DllUnregisterServer = P_DllUnregisterServer@0 PRIVATE
     GetdfDIJoystick = P_GetdfDIJoystick@0
+    NvOptimusEnablement DATA
+    AmdPowerXpressRequestHighPerformance DATA

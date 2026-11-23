@@ -111,4 +111,14 @@ show_boss=0
 ; while our main menu is up; 0 = let it run underneath (only if something at start-up breaks)
 hold_title=1
 
+; ---- Frame rate (build 123) ----
+[perf]
+; 1 = our own frame pacer replaces the game's frame limiter (fixed 60 fps schedule, precise timer,
+; clock sync lengthens frames slightly instead of pausing whole frames); 0 = the game's own limiter
+pacer=1
+
+[display]
+; 1 = the launcher sets Windows' graphics choice for the game to "High performance" (the fast
+; graphics card on laptops with two); 0 = remove that again (only if the launcher set it)
+fast_gpu=1
 ```

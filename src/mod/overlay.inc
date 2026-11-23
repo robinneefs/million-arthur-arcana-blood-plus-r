@@ -28,6 +28,7 @@
 #endif
 #ifndef UI_HARNESS     // (UI_HARNESS: the screens alone, drawn to a picture for checking the layout)
 #include <d3d9.h>
+#include <dwmapi.h>             // build 123: monitor refresh rate
 #include "backends/imgui_impl_dx9.h"
 #include "backends/imgui_impl_win32.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -788,7 +789,81 @@ static HRESULT WINAPI H_Present(IDirect3DDevice9* dev, const RECT* a, const RECT
     g_presentDepth--;
     return r;
 }
+// Build 123 (issue #5): what the game really draws with, for the logs and the Performance check:
+// graphics cards Windows offers, the one the game uses, v-sync, refresh rate, overlays loaded.
+static char g_gpuName[128] = "";
+static bool g_gpuIntegratedOnly = false, g_gpuOtherFaster = false;
+static int g_refreshHz = 0;
+static double g_dwmHz = 0;
+static char g_overlays[160] = "";
+static bool IsIntegratedName(const char* d, unsigned vendor) {
+    if (vendor == 0x8086)   // Intel: built-in unless a discrete Arc (A/B series, "Arc(TM) A770")
+        return !(strstr(d, "Arc(TM) A") || strstr(d, "Arc(TM) B") || strstr(d, "Arc A") || strstr(d, "Arc B"));
+    if (vendor == 0x1002)   // AMD: "Radeon(TM) Graphics", "Radeon 780M Graphics", "Vega 8 Graphics" are built-in
+        return strstr(d, "Graphics") && !strstr(d, "RX") && !strstr(d, "Pro");
+    return false;           // NVIDIA and others: a real card
+}
+static void DisplayInfoLog(IDirect3DDevice9* dev, const char* when) {
+    D3DDEVICE_CREATION_PARAMETERS cp{};
+    dev->GetCreationParameters(&cp);
+    IDirect3D9* d3d = nullptr;
+    if (SUCCEEDED(dev->GetDirect3D(&d3d)) && d3d) {
+        UINT n = d3d->GetAdapterCount();
+        bool usedIgp = false, otherDiscrete = false;
+        for (UINT i = 0; i < n && i < 8; i++) {
+            D3DADAPTER_IDENTIFIER9 id{};
+            if (FAILED(d3d->GetAdapterIdentifier(i, 0, &id))) continue;
+            bool igp = IsIntegratedName(id.Description, id.VendorId);
+            if (i == cp.AdapterOrdinal) { snprintf(g_gpuName, sizeof g_gpuName, "%s", id.Description); usedIgp = igp; }
+            else if (!igp && (id.VendorId == 0x10DE || id.VendorId == 0x1002 || id.VendorId == 0x8086)) otherDiscrete = true;
+            Log("display (%s): graphics adapter %u%s: %s (vendor %04lX, device %04lX, driver %u.%u.%u.%u)%s", when, i, i == cp.AdapterOrdinal ? " [the game's]" : "",
+                id.Description, id.VendorId, id.DeviceId, HIWORD(id.DriverVersion.HighPart), LOWORD(id.DriverVersion.HighPart),
+                HIWORD(id.DriverVersion.LowPart), LOWORD(id.DriverVersion.LowPart), igp ? " - built-in graphics" : "");
+        }
+        g_gpuIntegratedOnly = usedIgp;
+        g_gpuOtherFaster = usedIgp && otherDiscrete;
+        if (usedIgp)
+            Log("display: the game runs on BUILT-IN graphics%s", otherDiscrete ? " while a faster card is listed (monitor on the wrong port?)" :
+                " (on a laptop with a second graphics card, Windows or the driver chose the built-in one)");
+        d3d->Release();
+    }
+    IDirect3DSwapChain9* sc = nullptr;
+    D3DPRESENT_PARAMETERS pp{};
+    if (SUCCEEDED(dev->GetSwapChain(0, &sc)) && sc) { sc->GetPresentParameters(&pp); sc->Release(); }
+    pace::vsync = pp.PresentationInterval != D3DPRESENT_INTERVAL_IMMEDIATE;
+    HWND hwnd = *reinterpret_cast<HWND*>(addr::G_HWND);
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof mi;
+    DEVMODEW dm{};
+    dm.dmSize = sizeof dm;
+    g_refreshHz = 0;
+    if (hwnd && GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi) && EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm))
+        g_refreshHz = (int)dm.dmDisplayFrequency;
+    DWM_TIMING_INFO ti{};
+    ti.cbSize = sizeof ti;
+    g_dwmHz = SUCCEEDED(DwmGetCompositionTimingInfo(nullptr, &ti)) && ti.rateRefresh.uiDenominator ? (double)ti.rateRefresh.uiNumerator / ti.rateRefresh.uiDenominator : 0;
+    int monitors = GetSystemMetrics(SM_CMONITORS);
+    Log("display (%s): %ux%u %s, v-sync %s, monitor %d Hz (exactly %.3f Hz), %d monitor%s%s", when, pp.BackBufferWidth, pp.BackBufferHeight,
+        pp.Windowed ? "windowed" : "fullscreen", pace::vsync ? "ON" : "off", g_refreshHz, g_dwmHz, monitors, monitors == 1 ? "" : "s",
+        pace::vsync && g_refreshHz && (g_refreshHz < 59 || g_refreshHz > 61) ? " - v-sync on a monitor that is not 60 Hz: uneven frames" : "");
+    // overlays and wrappers that sit on the same picture call as ours
+    static const struct { const wchar_t* dll; const char* name; } kOv[] = {
+        {L"GameOverlayRenderer.dll", "Steam overlay"}, {L"DiscordHook.dll", "Discord overlay"}, {L"RTSSHooks.dll", "RivaTuner"},
+        {L"graphics-hook32.dll", "OBS game capture"}, {L"ReShade32.dll", "ReShade"}, {L"nvspcap.dll", "NVIDIA ShadowPlay"},
+        {L"igo32.dll", "EA overlay"}, {L"overlay.dll", "an overlay"}, {L"XSplitGameHook32.dll", "XSplit"}};
+    int k = 0;
+    g_overlays[0] = 0;
+    for (auto& o : kOv)
+        if (GetModuleHandleW(o.dll)) k += snprintf(g_overlays + k, sizeof g_overlays - k, "%s%s", k ? ", " : "", o.name);
+    wchar_t d3dPath[MAX_PATH] = L"", sys[MAX_PATH] = L"";
+    GetModuleFileNameW(GetModuleHandleW(L"d3d9.dll"), d3dPath, MAX_PATH);
+    GetSystemWindowsDirectoryW(sys, MAX_PATH);
+    bool d3dWrapped = d3dPath[0] && _wcsnicmp(d3dPath, sys, wcslen(sys)) != 0;
+    Log("display: overlays loaded: %s%s%ls", k ? g_overlays : "none found", d3dWrapped ? "; d3d9.dll is NOT Windows' own: " : "", d3dWrapped ? d3dPath : L"");
+}
 static HRESULT WINAPI H_PresentInner(IDirect3DDevice9* dev, const RECT* a, const RECT* b, HWND c, const RGNDATA* d) {
+    static bool infoDone = false;
+    if (dev == g_dev && !infoDone) { infoDone = true; DisplayInfoLog(dev, "start"); }
     if (g_resetImgui && dev == g_dev && g_imgui) {
         g_resetImgui = false;
         art::FreeAll(false);                     // build 90: game pictures belong to the old device
@@ -855,6 +930,7 @@ static HRESULT WINAPI H_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) 
     HRESULT r = o_Reset(dev, pp);
     if (g_imgui && dev == g_dev && SUCCEEDED(r)) ImGui_ImplDX9_CreateDeviceObjects();
     Log("ui: display reset (%s)", SUCCEEDED(r) ? "ok" : "failed");
+    if (dev == g_dev && SUCCEEDED(r)) DisplayInfoLog(dev, "after reset");   // build 123
     return r;
 }
 

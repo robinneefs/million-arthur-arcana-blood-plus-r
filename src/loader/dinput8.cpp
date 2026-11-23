@@ -96,3 +96,11 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     }
     return TRUE;
 }
+
+// Build 123 (issue #5): "prefer the fast graphics card" flags for laptops with two graphics
+// chips. The NVIDIA and AMD drivers officially read these only from the game's own exe, which
+// we don't change, so this is a free extra; the launcher's Windows graphics setting does the job.
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}

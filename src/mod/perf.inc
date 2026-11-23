@@ -43,6 +43,7 @@ static void PerfReport(const char* when) {
         k += snprintf(parts + k, sizeof parts - k, "%s%s %.2f", p ? ", " : "", perf::kPartNames[p], perf::partWin[p] / n);
     Log("perf (%s): fight frames %u-%u: %u over 20 ms, %u over 50 ms, %u over 100 ms; slowest %.1f ms, average %.2f ms; ours per frame: %s",
         when, perf::winFirst + 1, perf::frames, perf::over20, perf::over50, perf::over100, perf::winWorst, perf::winSum / n, parts);
+    PaceWindowLog(when);                 // build 123: the frame pacer's view of the same window
     for (uint32_t i = 0; i < perf::nWorst; i++) if (perf::worst[i].total > 20) PerfLogFrame(perf::worst[i], "slow");
     perf::nWorst = 0;
     perf::winFirst = perf::frames;
@@ -84,6 +85,7 @@ static void PerfFrameBegin() {
         for (auto& v : perf::partWin) v = 0;
         perf::lastHF = g_hFaults.load();
         perf::lastDF = dt::faults;
+        if (pace::active) pace::WinReset(pace::win);   // build 123
     } else if (!running && perf::on) {
         PerfReport("end");
         perf::on = false;
