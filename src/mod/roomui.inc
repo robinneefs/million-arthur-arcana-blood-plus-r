@@ -543,9 +543,19 @@ static void MmStickerTitle(ImDrawList* dl, float cx, float cy, const char* t) {
     MmImg(dl, "MA10_CMN", 83, cx - hw - 30, cy - hh - 10, 2 * hw + 60, 2 * hh + 20, MmGlowCol(P.glow, 0.35f), ImVec2(0, 0), ImVec2(1, 1), true);
     // plate: pointed ends like a ribbon
     ImVec2 pts[6] = {CP(cx - hw, cy - hh), CP(cx + hw, cy - hh), CP(cx + hw + 14, cy), CP(cx + hw, cy + hh), CP(cx - hw, cy + hh), CP(cx - hw - 14, cy)};
-    dl->AddConvexPolyFilled(pts, 6, MmRGBA(70, 8, 8));
-    dl->AddRectFilledMultiColor(CP(cx - hw, cy - hh), CP(cx + hw, cy), MmRGBA(150, 22, 18), MmRGBA(150, 22, 18), MmRGBA(90, 12, 10), MmRGBA(90, 12, 10));
-    dl->AddRectFilledMultiColor(CP(cx - hw, cy), CP(cx + hw, cy + hh), MmRGBA(90, 12, 10), MmRGBA(90, 12, 10), MmRGBA(52, 6, 6), MmRGBA(52, 6, 6));
+    {   // build 127c: the gradient fills the whole plate, pointed ends too (two quads with colours per corner)
+        ImU32 top = MmRGBA(150, 22, 18), mid = MmRGBA(90, 12, 10), bot = MmRGBA(52, 6, 6);
+        ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+        const ImVec2* q[2][4] = {{&pts[5], &pts[0], &pts[1], &pts[2]}, {&pts[5], &pts[2], &pts[3], &pts[4]}};
+        const ImU32 qc[2][4] = {{mid, top, top, mid}, {mid, mid, bot, bot}};
+        dl->PrimReserve(12, 8);
+        for (int k = 0; k < 2; k++) {
+            ImDrawIdx i0 = (ImDrawIdx)dl->_VtxCurrentIdx;
+            dl->PrimWriteIdx(i0); dl->PrimWriteIdx((ImDrawIdx)(i0 + 1)); dl->PrimWriteIdx((ImDrawIdx)(i0 + 2));
+            dl->PrimWriteIdx(i0); dl->PrimWriteIdx((ImDrawIdx)(i0 + 2)); dl->PrimWriteIdx((ImDrawIdx)(i0 + 3));
+            for (int v = 0; v < 4; v++) dl->PrimWriteVtx(*q[k][v], uv, qc[k][v]);
+        }
+    }
     dl->AddPolyline(pts, 6, MmC(P.gold, 0.95f), ImDrawFlags_Closed, CV(2));
     ImVec2 in[6] = {CP(cx - hw + 4, cy - hh + 5), CP(cx + hw - 4, cy - hh + 5), CP(cx + hw + 6, cy), CP(cx + hw - 4, cy + hh - 5), CP(cx - hw + 4, cy + hh - 5), CP(cx - hw - 6, cy)};
     dl->AddPolyline(in, 6, MmC(P.gold, 0.35f), ImDrawFlags_Closed, CV(1));
